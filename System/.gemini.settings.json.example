@@ -103,8 +103,6 @@
       "args": ["mcp"]
     },
 
-    "_comment_integrations": "--- Optional Integrations (add via /[tool]-setup) ---",
-
     "google-workspace-mcp": {
       "command": "npx",
       "args": ["-y", "google-workspace-mcp"],
