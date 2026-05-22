@@ -1,10 +1,12 @@
 # Companies
 
-Organization-level notes and account context.
+**Convention :** `Company_Name.md`
 
-Use this directory for:
-- company profiles
-- account strategy notes
-- relationship and opportunity context
+Fiches des organisations externes (clients, prospects, partenaires).
+Contient :
+- Contacts clés
+- Taille, secteur
+- Relation (Prospect / Customer / Partner / Churned)
+- Notes de contexte et feedbacks
 
-This directory is part of the core vault path contract and must exist.
+Utilise `work-mcp_list_companies` pour lister, `work-mcp_create_company` pour créer.
