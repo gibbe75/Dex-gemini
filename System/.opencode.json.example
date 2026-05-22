@@ -1,0 +1,139 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "work-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/work_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "calendar-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/calendar_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "granola-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/granola_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "career-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/career_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "dex-improvements-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/dex_improvements_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "resume-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/resume_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "update-checker": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/update_checker.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "onboarding-mcp": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/onboarding_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "dex-analytics": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/analytics_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}",
+        "DEX_ANALYTICS_MODE": "proxy",
+        "DEX_ANALYTICS_ENDPOINT": "",
+        "DEX_ANALYTICS_PROXY_TOKEN": ""
+      }
+    },
+    "session-memory": {
+      "type": "local",
+      "command": ["{{VAULT_PATH}}/.venv/bin/python", "{{VAULT_PATH}}/core/mcp/session_memory_server.py"],
+      "environment": {
+        "VAULT_PATH": "{{VAULT_PATH}}"
+      }
+    },
+    "slack-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "slack-mcp"],
+      "environment": {}
+    },
+    "qmd": {
+      "type": "local",
+      "command": ["qmd", "mcp"]
+    },
+
+    "google-workspace-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "google-workspace-mcp"],
+      "environment": {
+        "GOOGLE_CLIENT_ID": "{{GOOGLE_CLIENT_ID}}",
+        "GOOGLE_CLIENT_SECRET": "{{GOOGLE_CLIENT_SECRET}}"
+      }
+    },
+    "teams-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "teams-mcp"],
+      "environment": {
+        "TEAMS_TENANT_ID": "{{TEAMS_TENANT_ID}}",
+        "TEAMS_CLIENT_ID": "{{TEAMS_CLIENT_ID}}"
+      }
+    },
+    "todoist-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "todoist-mcp-server"],
+      "environment": {
+        "TODOIST_API_KEY": "{{TODOIST_API_KEY}}"
+      }
+    },
+    "things3-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "things3-mcp"],
+      "environment": {}
+    },
+    "trello-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "mcp-server-trello"],
+      "environment": {
+        "TRELLO_API_KEY": "{{TRELLO_API_KEY}}",
+        "TRELLO_TOKEN": "{{TRELLO_TOKEN}}"
+      }
+    },
+    "zoom-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "zoom-mcp"],
+      "environment": {
+        "ZOOM_CLIENT_ID": "{{ZOOM_CLIENT_ID}}",
+        "ZOOM_CLIENT_SECRET": "{{ZOOM_CLIENT_SECRET}}"
+      }
+    },
+    "notion-mcp": {
+      "type": "local",
+      "command": ["npx", "-y", "@notionhq/notion-mcp-server"],
+      "environment": {
+        "NOTION_TOKEN": "{{NOTION_TOKEN}}"
+      }
+    }
+  }
+}

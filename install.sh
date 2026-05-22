@@ -177,23 +177,25 @@ if [ ! -f .mcp.json ]; then
     fi
     echo "   MCP servers configured for: $CURRENT_PATH"
 fi
-# Create .gemini/settings.json for Gemini CLI
-if [ ! -f "$HOME/.gemini/settings.json" ] && command -v gemini &> /dev/null; then
+# Create ~/.config/opencode/opencode.json for OpenCode
+OPENCODE_CONFIG_DIR="$HOME/.config/opencode"
+OPENCODE_CONFIG_FILE="$OPENCODE_CONFIG_DIR/opencode.json"
+if [ ! -f "$OPENCODE_CONFIG_FILE" ] && command -v opencode &> /dev/null; then
     echo ""
-    echo "📝 Configuring Gemini CLI MCP servers..."
+    echo "📝 Configuring OpenCode MCP servers..."
     CURRENT_PATH="$(pwd)"
-    mkdir -p "$HOME/.gemini"
+    mkdir -p "$OPENCODE_CONFIG_DIR"
     if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
-        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g; s|\.venv/bin/python|\.venv/Scripts/python.exe|g" System/.gemini.settings.json.example > "$HOME/.gemini/settings.json"
+        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g; s|\.venv/bin/python|\.venv/Scripts/python.exe|g" System/.opencode.json.example > "$OPENCODE_CONFIG_FILE"
     else
-        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g" System/.gemini.settings.json.example > "$HOME/.gemini/settings.json"
+        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g" System/.opencode.json.example > "$OPENCODE_CONFIG_FILE"
     fi
-    echo "   Gemini CLI MCP servers configured: $HOME/.gemini/settings.json"
-elif [ ! -f "$HOME/.gemini/settings.json" ]; then
+    echo "   OpenCode MCP servers configured: $OPENCODE_CONFIG_FILE"
+elif [ ! -f "$OPENCODE_CONFIG_FILE" ]; then
     echo ""
-    echo "ℹ️  Gemini CLI not detected - skipping Gemini CLI MCP config"
-    echo "   Install with: npm install -g @google/gemini-cli"
-    echo "   Then run: bash install.sh  (to generate ~/.gemini/settings.json)"
+    echo "ℹ️  OpenCode not detected - skipping OpenCode MCP config"
+    echo "   Install with: npm install -g opencode-ai"
+    echo "   Then run: bash install.sh  (to generate ~/.config/opencode/opencode.json)"
 fi
 # Sync MCP servers to Cursor and Claude Desktop
 echo ""
@@ -286,13 +288,13 @@ if [[ "$WORK_MCP_STATUS" == *"Needs"* ]]; then
 fi
 echo ""
 echo "Next steps:"
-echo "  Cursor / Claude Code:"
-echo "    1. Open Cursor or Claude Code in this folder"
+echo "  OpenCode (recommended):"
+echo "    1. Run: opencode  (in this folder)"
 echo "    2. Type: /setup"
 echo "    3. Answer the setup questions (~5 minutes)"
 echo ""
-echo "  Gemini CLI:"
-echo "    1. Run: gemini  (in this folder)"
+echo "  Cursor / Claude Code:"
+echo "    1. Open Cursor or Claude Code in this folder"
 echo "    2. Type: /setup"
 echo "    3. Answer the setup questions (~5 minutes)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
