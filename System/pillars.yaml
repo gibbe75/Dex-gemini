@@ -14,15 +14,43 @@
 #
 # The Work MCP uses these to categorize tasks and check balance across your work.
 
-pillars: []
-  # Will be populated during onboarding
-  # Example structure:
-  # - id: pillar_id
-  #   name: "Pillar Name"
-  #   description: "What this pillar represents"
-  #   keywords:
-  #     - keyword1
-  #     - keyword2
+pillars:
+  - id: rem_2_0
+    name: "Rém 2.0"
+    description: "Finaliser la nouvelle version de Rémunération — nouveau moteur, modèle multi-devises, multi-périodicité, import/export Excel V2"
+    keywords:
+      - rémunération
+      - rem
+      - paie
+      - salaire
+      - masse salariale
+      - EVP
+      - variable
+      - prime
+      - bonus
+
+  - id: transparence_salariale
+    name: "Transparence salariale"
+    description: "Lancer le module de transparence salariale pour aider les clients à se préparer à la directive européenne"
+    keywords:
+      - transparence
+      - directive européenne
+      - écart salarial
+      - benchmark
+      - equity
+      - reporting
+
+  - id: prise_de_poste
+    name: "Prise de poste"
+    description: "Monter en compétences comme Senior Lead Product Manager — manager 2 PMs, structurer la roadmap produit"
+    keywords:
+      - lead
+      - management
+      - équipe
+      - roadmap
+      - senior
+      - coaching
+      - recrutement
 
 # Priority limits (how many active tasks per priority level)
 priority_limits:

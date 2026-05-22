@@ -3,30 +3,94 @@
 <!-- ============================================================
 ## IF YOU'RE BUILDING THIS (developer context)
 
-You are in the `dex-core` repo — the distributable vault template that ships to users.
-Everything below this block is user-facing and ships as-is.
+This is `dex-core` — the **public distributable vault template**. Everything below this comment
+block is user-facing and ships verbatim to every user who clones from GitHub.
+Never put internal planning docs, PRDs, or user-specific content here.
 
-**Dev routing:**
+### Repo routing
 - UI/app changes → `~/dex/product/dex-app/`
 - Cloud/sync/agents → `~/dex/product/dex-cloud/`
-- Vault structure, install scripts, skills, MCPs → HERE (dex-core)
+- Vault structure, install scripts, skills, MCPs → HERE
 - Cross-repo work → open from `~/dex/` workspace root
 
-**What dex-core owns:**
-- `core/` — Python path contracts, CLI runtime
-- `System/` — vault system files (product-context, backlog, etc.)
-- `.agents/skills/` — distributable skills (anything in `personal/` stays local)
-- `mcp-servers/` — MCP scripts that ship to users
-- `install.sh` — installer
+### What this repo owns
+- `core/` — Python path contracts (`paths.py`), all MCP servers (`core/mcp/`), tests, migrations
+- `System/` — vault config templates (`*.example` files), user-profile.yaml, pillars.yaml
+- `.claude/skills/` — ~70 skill SKILL.md files; `.agents/skills/` = distributable subset
+- `.scripts/` — Node automation (auto-link-people.cjs, meeting-intel)
+- `install.sh` — sets up `.venv/`, installs Python deps, generates `.mcp.json` from template
 
-**🚨 dex-core is the PUBLIC distributable repo.** Never put internal planning docs, PRDs, or anything user-specific into this repo. Everything here ships to every user who clones from GitHub.
+### Dev commands
+```bash
+# Setup
+./install.sh                  # creates .venv/, npm ci, generates config files
 
-**Before any PR:** run `/simplify` on changed files.
-**All issues** → `davekilleen/dex-backlog`, never on this repo.
+# Tests
+pytest core/tests/ core/mcp/tests/ core/migrations/tests/ -v --cov=core --cov-report=term
+npm run test:hooks             # Node hook tests in .claude/hooks/tests/
 
-**OpenCode setup:** MCP servers are configured in `~/.config/opencode/opencode.json`. The installer
-generates this from `System/.opencode.json.example`. Skills live in `.claude/skills/`
-(same folder as always — OpenCode reads them from disk via skill instructions in this file).
+# Lint
+ruff check core/               # Python only; line-length 120, target py3.12
+
+# Path contract (run after changing paths.py)
+python core/paths.py           # regenerates paths.json
+
+# Auto-link people after editing vault markdown
+node .scripts/auto-link-people.cjs <file-path>
+node .scripts/auto-link-people.cjs --today   # batch key files
+```
+
+### CI gates (all must pass on PR)
+- `pytest` with `--cov-fail-under=15` (total) and touched-file coverage ≥ 10%
+- `ruff check core/`
+- `scripts/check-path-contract-usage.sh` — no hardcoded vault paths allowed
+- `scripts/check-path-consistency.sh`
+- `scripts/check-doc-drift.sh`
+- `scripts/check-pr-governance.sh`
+- `scripts/benchmark_large_vault.py --files 1500 --budget-seconds 5.0`
+- `scripts/security-gate.sh`
+- `scripts/verify-distribution.sh`
+- On push to `main`: `scripts/build-release.sh` force-pushes to `release` branch
+
+CI sets `VAULT_PATH=core/tests/fixtures/vault` — all MCP servers require `VAULT_PATH` env var.
+
+### Path contract rule
+All hardcoded vault paths must go through `core/paths.py`. CI enforces this.
+Do not introduce literal path strings like `05-Areas/People/` outside of `paths.py`.
+
+### MCP servers
+All Python MCP servers live in `core/mcp/` and run via `.venv/bin/python` (Mac/Linux) or
+`.venv/Scripts/python.exe` (Windows). Each requires `VAULT_PATH` env var.
+
+Key servers: `work_server.py`, `calendar_server.py`, `granola_server.py`, `career_server.py`,
+`dex_improvements_server.py`, `update_checker.py`, `onboarding_server.py`,
+`session_memory_server.py`, `analytics_server.py`, `beta_server.py`, `resume_server.py`
+
+External (optional, added via setup skills): `slack-mcp` (npx), `qmd` (semantic search),
+`scrapling` (web scraping), `google-workspace-mcp`, `teams-mcp`, `todoist-mcp`, `things3-mcp`,
+`trello-mcp`, `atlassian-mcp` (OAuth via mcp-remote@latest)
+
+### Ruff suppressions — intentional, do not bulk-fix
+`E402` (sys.path before imports in MCP entry points), `E501`, `E722`, `F841`
+
+### Key conventions
+- **CHANGELOG.md:** No `[Unreleased]` section. Every entry gets version + date immediately.
+- **Issues:** File at `davekilleen/dex-backlog`, never on this repo.
+- **Before any PR:** run `/simplify` on changed files.
+- **`qmd` is optional:** All semantic-search behaviors must have a grep/glob fallback.
+- **Analytics:** opt-out by default; needs `DEX_ANALYTICS_MODE`, `DEX_ANALYTICS_ENDPOINT`,
+  `DEX_ANALYTICS_PROXY_TOKEN` env vars for the proxy relay path.
+- **`.venv/` lives inside vault root** (intentional — avoids PEP 668 conflicts).
+- **Multi-client AI files:** `AGENTS.md` (OpenCode), `CLAUDE.md` (Claude Code/Cursor),
+  `GEMINI.md` (Gemini CLI) — keep in sync when changing persona or developer context.
+- **Task IDs:** format `^task-YYYYMMDD-XXX` (Obsidian block refs).
+- **Person pages:** `05-Areas/People/Internal/` vs `External/` routed by email domain in
+  `user-profile.yaml`.
+
+### OpenCode-specific
+- Model set via `OPENCODE_MODEL` env var; `opencode.json` reads `{env:OPENCODE_MODEL}`.
+- Generated `opencode.json` (user-level) is built from `System/.opencode.json.example` by installer.
+- Skills are loaded from `.claude/skills/<name>/SKILL.md` via the skill tool in this file.
 ============================================================ -->
 
 **Last Updated:** May 22, 2026 (OpenCode support)
@@ -68,13 +132,19 @@ The system automatically suggests `/getting-started` at next session if vault < 
 
 ## User Profile
 
-<!-- Updated during onboarding -->
-**Name:** Not yet configured
-**Role:** Not yet configured
-**Company Size:** Not yet configured
-**Working Style:** Not yet configured
+<!-- Updated during onboarding + career setup (2026-05-22) -->
+**Name:** Baudouin
+**Role:** Senior Lead Product Manager (manages 2 PMs — Nils Hasselmark, Gilles "Giloo" Van Elslande)
+**Company:** Lucca
+**Company Size:** Scaling (100-1,000)
+**BU:** Pay (Pagga) — Produit Rémunération
+**Reports to:** Alexandre Gagnard
+**Target Role:** Product Director (1 an)
+**Working Style:** Collaborative coaching, professional casual
 **Pillars:**
-- Not yet configured
+- Rém 2.0 — Finaliser la nouvelle version de Rémunération
+- Transparence salariale — Lancer le module de transparence salariale
+- Prise de poste — Monter en compétences comme Senior Lead PM
 
 ---
 

@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "built_at": "2026-05-22T23:33:35.835529",
+  "total": 4,
+  "by_type": {
+    "internal": 4,
+    "external": 0,
+    "cpo_network": 0
+  },
+  "people": [
+    {
+      "name": "Alexandre Gagnard",
+      "company": null,
+      "role": null,
+      "email": null,
+      "type": "internal",
+      "path": "05-Areas\\People\\Internal\\Alexandre_Gagnard.md",
+      "last_interaction": null,
+      "tags": [],
+      "status": "stub"
+    },
+    {
+      "name": "Camille Jouzeau",
+      "company": null,
+      "role": null,
+      "email": null,
+      "type": "internal",
+      "path": "05-Areas\\People\\Internal\\Camille_Jouzeau.md",
+      "last_interaction": null,
+      "tags": [],
+      "status": "populated"
+    },
+    {
+      "name": "Gilles Van Elslande",
+      "company": null,
+      "role": null,
+      "email": null,
+      "type": "internal",
+      "path": "05-Areas\\People\\Internal\\Gilles_Van_Elslande.md",
+      "last_interaction": null,
+      "tags": [],
+      "status": "stub"
+    },
+    {
+      "name": "Nils Hasselmark",
+      "company": null,
+      "role": null,
+      "email": null,
+      "type": "internal",
+      "path": "05-Areas\\People\\Internal\\Nils_Hasselmark.md",
+      "last_interaction": null,
+      "tags": [],
+      "status": "stub"
+    }
+  ]
+}

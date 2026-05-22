@@ -12,7 +12,7 @@
 - [ ] Daily review (`/review` or `/daily-review`)
 - [ ] Weekly planning (`/week-plan`)
 - [ ] Weekly review (`/week-review`)
-- [ ] Quarterly planning (`/quarter-plan`)
+- [x] Quarterly planning (`/quarter-plan`)
 - [ ] Quarterly review (`/quarter-review`)
 - [ ] Getting started tour (`/getting-started`)
 - [ ] Journaling (`/journal`)
@@ -53,7 +53,7 @@
 
 ## Career Development (6 features)
 
-- [ ] Career setup (`/career-setup`)
+- [x] Career setup (`/career-setup`)
 - [ ] Career coaching (`/career-coach`)
 - [ ] Resume builder (`/resume-builder`)
 - [ ] Career evidence captured
@@ -169,6 +169,20 @@ Auto-calculated metrics (if analytics opted in). Updated when features are used.
 - `exploring` (days 8-30): Trying different features
 - `established` (days 31-90): Regular usage patterns
 - `power_user` (90+ days): Deep feature adoption
+
+---
+
+## Role-Specific Skills
+
+**Installed:**
+- [x] /customer-intel
+- [x] /feature-decision
+- [x] /roadmap
+
+**Used:**
+- [ ] /customer-intel
+- [ ] /feature-decision
+- [ ] /roadmap
 
 ---
 
