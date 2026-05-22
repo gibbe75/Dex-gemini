@@ -74,17 +74,19 @@ fi
 echo "✅ Node.js $(node -v)"
 
 # Check Python (required for Work MCP - task sync)
-# Windows often uses 'python' instead of 'python3'
+# Windows often uses 'python' instead of 'python3'.
+# The Windows Store stub outputs an error message instead of a version —
+# we verify the output actually contains "Python 3" before accepting it.
 PYTHON_CMD=""
-if command -v python3 &> /dev/null; then
-    PYTHON_CMD="python3"
-elif command -v python &> /dev/null; then
-    # Verify it's Python 3, not Python 2
-    PYTHON_VERSION=$(python --version 2>&1 | grep "Python 3")
-    if [ -n "$PYTHON_VERSION" ]; then
-        PYTHON_CMD="python"
+for _py in python3 python py; do
+    if command -v "$_py" &> /dev/null; then
+        _ver=$("$_py" --version 2>&1)
+        if echo "$_ver" | grep -q "^Python 3"; then
+            PYTHON_CMD="$_py"
+            break
+        fi
     fi
-fi
+done
 
 if [ -n "$PYTHON_CMD" ]; then
     PYTHON_VERSION=$($PYTHON_CMD --version | cut -d' ' -f2)
@@ -147,7 +149,9 @@ fi
 # Install Node dependencies
 echo ""
 echo "📦 Installing dependencies..."
-if command -v pnpm &> /dev/null; then
+# Try pnpm first but verify it actually works (Windows PATH quirks can make
+# 'command -v pnpm' succeed even when pnpm isn't properly installed)
+if command -v pnpm &> /dev/null && pnpm --version &> /dev/null 2>&1; then
     pnpm install
 elif command -v npm &> /dev/null; then
     npm install
@@ -173,7 +177,24 @@ if [ ! -f .mcp.json ]; then
     fi
     echo "   MCP servers configured for: $CURRENT_PATH"
 fi
-
+# Create .gemini/settings.json for Gemini CLI
+if [ ! -f "$HOME/.gemini/settings.json" ] && command -v gemini &> /dev/null; then
+    echo ""
+    echo "📝 Configuring Gemini CLI MCP servers..."
+    CURRENT_PATH="$(pwd)"
+    mkdir -p "$HOME/.gemini"
+    if [[ "$OSTYPE" == "msys" || "$OSTYPE" == "win32" ]]; then
+        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g; s|\.venv/bin/python|\.venv/Scripts/python.exe|g" System/.gemini.settings.json.example > "$HOME/.gemini/settings.json"
+    else
+        sed "s|{{VAULT_PATH}}|$CURRENT_PATH|g" System/.gemini.settings.json.example > "$HOME/.gemini/settings.json"
+    fi
+    echo "   Gemini CLI MCP servers configured: $HOME/.gemini/settings.json"
+elif [ ! -f "$HOME/.gemini/settings.json" ]; then
+    echo ""
+    echo "ℹ️  Gemini CLI not detected - skipping Gemini CLI MCP config"
+    echo "   Install with: npm install -g @google/gemini-cli"
+    echo "   Then run: bash install.sh  (to generate ~/.gemini/settings.json)"
+fi
 # Sync MCP servers to Cursor and Claude Desktop
 echo ""
 echo "🔄 Syncing MCP servers to AI clients..."
@@ -265,7 +286,13 @@ if [[ "$WORK_MCP_STATUS" == *"Needs"* ]]; then
 fi
 echo ""
 echo "Next steps:"
-echo "  1. In Cursor chat, type: /setup"
-echo "  2. Answer the setup questions (~5 minutes)"
-echo "  3. Start using Dex!"
+echo "  Cursor / Claude Code:"
+echo "    1. Open Cursor or Claude Code in this folder"
+echo "    2. Type: /setup"
+echo "    3. Answer the setup questions (~5 minutes)"
+echo ""
+echo "  Gemini CLI:"
+echo "    1. Run: gemini  (in this folder)"
+echo "    2. Type: /setup"
+echo "    3. Answer the setup questions (~5 minutes)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

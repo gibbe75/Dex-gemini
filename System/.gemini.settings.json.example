@@ -1,7 +1,6 @@
 {
   "mcpServers": {
     "work-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/work_server.py"
@@ -11,7 +10,6 @@
       }
     },
     "calendar-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/calendar_server.py"
@@ -21,7 +19,6 @@
       }
     },
     "granola-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/granola_server.py"
@@ -31,7 +28,6 @@
       }
     },
     "career-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/career_server.py"
@@ -41,7 +37,6 @@
       }
     },
     "dex-improvements-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/dex_improvements_server.py"
@@ -51,7 +46,6 @@
       }
     },
     "resume-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/resume_server.py"
@@ -61,7 +55,6 @@
       }
     },
     "update-checker": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/update_checker.py"
@@ -71,7 +64,6 @@
       }
     },
     "onboarding-mcp": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/onboarding_server.py"
@@ -81,7 +73,6 @@
       }
     },
     "dex-analytics": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/analytics_server.py"
@@ -94,7 +85,6 @@
       }
     },
     "session-memory": {
-      "type": "stdio",
       "command": "{{VAULT_PATH}}/.venv/bin/python",
       "args": [
         "{{VAULT_PATH}}/core/mcp/session_memory_server.py"
