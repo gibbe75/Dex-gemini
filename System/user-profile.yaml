@@ -50,10 +50,10 @@ communication:
 # How Dex processes meetings from Granola
 meeting_processing:
   # Mode: "automatic" (notes appear in your vault within 30min) or "manual" (run /process-meetings)
-  mode: automatic
+  mode: manual
   
   # API provider for automatic mode: gemini, anthropic, or openai
-  api_provider: gemini
+  api_provider: anthropic
 
 # Meeting Intelligence Configuration
 # Controls what gets extracted from your meetings (set during onboarding based on role)

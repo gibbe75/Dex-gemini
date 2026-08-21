@@ -1,2 +1,4 @@
 {"timestamp": "2026-05-22T18:12:11.000560+00:00", "event": "demo_mode_used", "visitor_id": "anonymous", "properties": {}}
 {"timestamp": "2026-05-22T21:16:11.566351+00:00", "event": "career_setup_completed", "visitor_id": "aa56f4fa2523f232", "properties": {"ladder_uploaded": true, "goals_set": true}}
+{"timestamp": "2026-05-25T15:53:05.542653+00:00", "event": "daily_review_completed", "visitor_id": "aa56f4fa2523f232", "properties": {"wins_count": 4, "learnings_count": 2}}
+{"timestamp": "2026-05-26T10:49:04.542263+00:00", "event": "daily_plan_completed", "visitor_id": "aa56f4fa2523f232", "properties": {"meetings_count": 7, "tasks_surfaced": 7, "priorities_count": 4}}

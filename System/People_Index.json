@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "built_at": "2026-05-22T23:33:35.835529",
+  "built_at": "2026-05-26T12:48:16.078667",
   "total": 4,
   "by_type": {
     "internal": 4,
@@ -39,7 +39,7 @@
       "path": "05-Areas\\People\\Internal\\Gilles_Van_Elslande.md",
       "last_interaction": null,
       "tags": [],
-      "status": "stub"
+      "status": "populated"
     },
     {
       "name": "Nils Hasselmark",
