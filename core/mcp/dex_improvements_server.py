@@ -26,6 +26,15 @@ import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
+_ANALYTICS_REPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _ANALYTICS_REPO_ROOT not in sys.path:
+    sys.path.insert(0, _ANALYTICS_REPO_ROOT)
+
+from core.mcp.analytics_receipts import (
+    surface_analytics_attempt,
+    unavailable_analytics_delivery,
+)
+
 # QMD semantic search (optional - gracefully degrade if not available)
 try:
     from utils.qmd_query import is_qmd_available, vault_search
@@ -33,14 +42,17 @@ try:
 except ImportError:
     HAS_QMD = False
 
-# Analytics helper (optional - gracefully degrade if not available)
+# Analytics receipts must remain observable in both direct-launch and package
+# import modes. If the helper cannot load, callers receive only the fixed safe
+# receipt failure below.
 try:
-    from analytics_helper import fire_event as _fire_analytics_event
+    from core.mcp.analytics_helper import fire_event as _fire_analytics_event
     HAS_ANALYTICS = True
 except ImportError:
     HAS_ANALYTICS = False
+
     def _fire_analytics_event(event_name, properties=None):
-        return {'fired': False, 'reason': 'analytics_not_available'}
+        return unavailable_analytics_delivery()
 
 # Health system — error queue and health reporting
 try:
@@ -457,7 +469,37 @@ def insert_idea_into_priority_queue(idea_id: str, title: str, description: str, 
     match = re.search(section_pattern, content)
     if match:
         insert_pos = match.end()
-        new_content = content[:insert_pos] + "\n" + idea_entry + content[insert_pos:]
+        next_section = re.search(r'\n(?:### |---)', content[insert_pos:])
+        section_end = (
+            insert_pos + next_section.start()
+            if next_section
+            else len(content)
+        )
+        section_content = content[insert_pos:section_end]
+        existing_ideas = list(re.finditer(
+            r'^-\s*\*\*\[[^\]]+\]\*\*.*?(?=^-\s*\*\*\[[^\]]+\]\*\*|\Z)',
+            section_content,
+            re.MULTILINE | re.DOTALL,
+        ))
+        for existing_idea in existing_ideas:
+            existing_score = re.search(
+                r'\*\*Score:\*\*\s*(\d+)',
+                existing_idea.group(0),
+            )
+            if existing_score and int(existing_score.group(1)) < score:
+                insert_pos += existing_idea.start()
+                break
+        else:
+            if existing_ideas:
+                insert_pos = section_end
+
+        leading_newline = '\n' if not existing_ideas else ''
+        new_content = (
+            content[:insert_pos]
+            + leading_newline
+            + idea_entry
+            + content[insert_pos:]
+        )
     else:
         fallback = re.search(r'(## Archive|## Summary|---\s*$)', content)
         if fallback:
@@ -817,7 +859,10 @@ def mark_idea_implemented(idea_id: str, implementation_date: Optional[str] = Non
     
     # Create archive entry
     impl_date = implementation_date or datetime.now().strftime('%Y-%m-%d')
-    archive_entry = f"- **[{idea_id}]** {idea['title']} - *Implemented: {impl_date}*\n"
+    archive_entry = (
+        f"- **[{idea_id}]** {idea['title']}\n"
+        f"  - **Implemented:** {impl_date}\n"
+    )
     
     # Add to archive section
     archive_pattern = r'(## Archive \(Implemented\)\s*\n(?:\s*\*.*?\*\s*\n)?)'
@@ -1071,10 +1116,12 @@ async def _handle_call_tool_inner(
                     "Check `System/Dex_Backlog.md` to see all your ideas"
                 ]
             }
-            try:
-                _fire_analytics_event('idea_captured', {'category': category})
-            except Exception:
-                pass
+            surface_analytics_attempt(
+                result,
+                _fire_analytics_event,
+                'idea_captured',
+                {'category': category},
+            )
         else:
             result = {
                 "success": False,
@@ -1138,10 +1185,11 @@ async def _handle_call_tool_inner(
         result = mark_idea_implemented(idea_id, impl_date)
         
         if result.get('success'):
-            try:
-                _fire_analytics_event('idea_implemented')
-            except Exception:
-                pass
+            surface_analytics_attempt(
+                result,
+                _fire_analytics_event,
+                'idea_implemented',
+            )
         
         return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
     

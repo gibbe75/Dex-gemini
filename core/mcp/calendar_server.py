@@ -29,9 +29,10 @@ import os
 import re
 
 # Vault paths (centralized in core.paths)
+import subprocess
 import sys
-import tempfile
 from datetime import date, datetime, timedelta
+from functools import cache
 from pathlib import Path
 from typing import Optional
 
@@ -45,6 +46,7 @@ if _repo_root not in sys.path:
     sys.path.append(_repo_root)
 from core.paths import PEOPLE_DIR
 from core.paths import VAULT_ROOT as VAULT_PATH
+from core.utils.feature_status import feature_status
 
 # Health system — error queue and health reporting
 try:
@@ -74,6 +76,8 @@ logger = logging.getLogger(__name__)
 
 # Scripts directory
 SCRIPTS_DIR = Path(__file__).parent / "scripts"
+CALENDAR_FEATURE = "Calendar access"
+REMINDERS_FEATURE = "Reminders access"
 
 # User profile path
 USER_PROFILE_PATH = VAULT_PATH / "System" / "user-profile.yaml"
@@ -117,7 +121,6 @@ def get_default_work_calendar() -> str:
 DEFAULT_WORK_CALENDAR = get_default_work_calendar()
 logger.info(f"Default work calendar: {DEFAULT_WORK_CALENDAR}")
 
-
 # Custom JSON encoder for handling date/datetime objects
 class DateTimeEncoder(json.JSONEncoder):
     def default(self, obj):
@@ -126,87 +129,126 @@ class DateTimeEncoder(json.JSONEncoder):
         return super().default(obj)
 
 
-def run_applescript(script: str) -> tuple[bool, str]:
-    """Run an AppleScript and return (success, output).
-    
-    Uses os.system with temp file output to avoid subprocess.run timeout issues
-    with Calendar.app AppleScript queries.
-    """
-    try:
-        # Write script to temp file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.scpt', delete=False) as script_file:
-            script_file.write(script)
-            script_path = script_file.name
-        
-        # Output file
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as out_file:
-            out_path = out_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as err_file:
-            err_path = err_file.name
-        
-        try:
-            # Run osascript via os.system (avoids subprocess pipe issues)
-            exit_code = os.system(f'osascript "{script_path}" > "{out_path}" 2> "{err_path}"')
-            
-            with open(out_path, 'r') as f:
-                stdout = f.read().strip()
-            with open(err_path, 'r') as f:
-                stderr = f.read().strip()
-            
-            if exit_code == 0:
-                return True, stdout
-            else:
-                return False, stderr or f"Exit code: {exit_code}"
-        finally:
-            # Cleanup temp files
-            for path in [script_path, out_path, err_path]:
-                try:
-                    os.unlink(path)
-                except:
-                    pass
-                    
-    except Exception as e:
-        return False, str(e)
+ALLOWED_SCRIPTS = {
+    "calendar_eventkit.py",
+    "calendar_create_event.sh",
+    "calendar_delete_event.sh",
+    "reminders_eventkit.py",
+    "check_calendar_permission.py",
+    "check_reminders_permission.py",
+}
 
 
 def run_shell_script(script_name: str, *args) -> tuple[bool, str]:
-    """Run a shell script from the scripts directory."""
-    script_path = SCRIPTS_DIR / script_name
+    """Run an allowed shell script from the scripts directory."""
+    if script_name not in ALLOWED_SCRIPTS:
+        return False, f"Script not allowed: {script_name}"
+
+    script_path = (SCRIPTS_DIR / script_name).resolve()
+    if not script_path.is_relative_to(SCRIPTS_DIR.resolve()):
+        return False, "Invalid script path"
+
     if not script_path.exists():
-        return False, f"Script not found: {script_path}"
-    
+        return False, f"Script not found: {script_name}"
+
     try:
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as out_file:
-            out_path = out_file.name
-        
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as err_file:
-            err_path = err_file.name
-        
-        try:
-            # Build command with quoted args
-            cmd_args = ' '.join(f'"{arg}"' for arg in args)
-            cmd = f'"{script_path}" {cmd_args} > "{out_path}" 2> "{err_path}"'
-            exit_code = os.system(cmd)
-            
-            with open(out_path, 'r') as f:
-                stdout = f.read().strip()
-            with open(err_path, 'r') as f:
-                stderr = f.read().strip()
-            
-            if exit_code == 0:
-                return True, stdout
-            else:
-                return False, stderr or f"Exit code: {exit_code}"
-        finally:
-            for path in [out_path, err_path]:
-                try:
-                    os.unlink(path)
-                except:
-                    pass
-                    
+        env = {**os.environ, "PYTHONPATH": str(VAULT_PATH)}
+        if script_path.suffix == ".sh":
+            # Shell helpers must run under bash — forcing them through
+            # sys.executable fails with a Python SyntaxError at the first
+            # bash line.
+            command = ["/bin/bash", str(script_path), *args]
+        else:
+            # Run Python helpers under THIS interpreter (the venv python,
+            # which has pyobjc EventKit) with the repo root on PYTHONPATH so
+            # `from core.paths import ...` resolves. The script's shebang would
+            # otherwise pick up system python3, which lacks EventKit.
+            # (adapted from #63)
+            command = [sys.executable, str(script_path), *args]
+        result = subprocess.run(
+            command,
+            capture_output=True, text=True, timeout=120, env=env
+        )
+
+        if result.returncode == 0:
+            return True, result.stdout.strip()
+        else:
+            # Helper scripts print their actionable errors (e.g. the
+            # calendar-access-denied guidance) as JSON on stdout — fall back
+            # to it so users never see a bare "Exit code: 1" (#377).
+            return False, (
+                result.stderr.strip()
+                or result.stdout.strip()
+                or f"Exit code: {result.returncode}"
+            )
+    except subprocess.TimeoutExpired:
+        return False, f"Script '{script_name}' timed out after 120 seconds"
     except Exception as e:
         return False, str(e)
+
+
+def _broken_feature_payload(feature: str, error: str) -> dict:
+    """Preserve a legacy Calendar/Reminders error while adding status fields."""
+    return feature_status(feature, "broken", error, error=error)
+
+
+def _get_calendar_list_result() -> dict:
+    """Return the same calendar-list payload exposed by the MCP tool."""
+    success, output = run_shell_script("calendar_eventkit.py", "list")
+
+    if not success:
+        return _broken_feature_payload(CALENDAR_FEATURE, output)
+
+    try:
+        calendars = json.loads(output)
+        calendar_names = [calendar["title"] for calendar in calendars]
+        return {
+            "success": True,
+            "calendars": calendar_names,
+            "count": len(calendar_names),
+            "details": calendars,
+        }
+    except json.JSONDecodeError as e:
+        return _broken_feature_payload(CALENDAR_FEATURE, f"JSON parse error: {e}")
+
+
+@cache
+def _get_available_calendar_names() -> Optional[list[str]]:
+    """List calendar names once per process for empty-query validation."""
+    try:
+        result = _get_calendar_list_result()
+    except Exception:
+        return None
+
+    if not result.get("success"):
+        return None
+
+    return result["calendars"]
+
+
+def _add_missing_calendar_warning(
+    result: dict,
+    calendar_name: str,
+    *,
+    event_count: int,
+) -> dict:
+    """Warn when an empty query targeted a calendar that does not exist."""
+    if not result.get("success") or event_count != 0:
+        return result
+
+    try:
+        calendar_names = _get_available_calendar_names()
+    except Exception:
+        return result
+
+    if calendar_names is not None and calendar_name not in calendar_names:
+        result["warning"] = (
+            f"Calendar '{calendar_name}' was not found. Available calendars: "
+            f"{calendar_names}. Set calendar.work_calendar in "
+            "System/user-profile.yaml."
+        )
+
+    return result
 
 
 def parse_applescript_list(output: str) -> list[str]:
@@ -621,25 +663,7 @@ async def _handle_call_tool_inner(
     arguments = arguments or {}
 
     if name == "calendar_list_calendars":
-        # Use fast EventKit
-        success, output = run_shell_script("calendar_eventkit.py", "list")
-        
-        if success:
-            try:
-                calendars = json.loads(output)
-                # Extract just the titles for backward compatibility
-                calendar_names = [cal["title"] for cal in calendars]
-                result = {
-                    "success": True,
-                    "calendars": calendar_names,
-                    "count": len(calendar_names),
-                    "details": calendars  # Full details for advanced use
-                }
-            except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
-        else:
-            result = {"success": False, "error": output}
-        
+        result = _get_calendar_list_result()
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
     
     elif name == "calendar_get_events":
@@ -695,10 +719,15 @@ async def _handle_call_tool_inner(
                     "count": len(filtered_events)
                 }
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(CALENDAR_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
-        
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
+
+        result = _add_missing_calendar_warning(
+            result,
+            calendar_name,
+            event_count=result.get("count", -1),
+        )
         return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
     
     elif name == "calendar_get_today":
@@ -749,7 +778,7 @@ async def _handle_call_tool_inner(
                 }
             }
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
         
         return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
     
@@ -780,10 +809,15 @@ async def _handle_call_tool_inner(
                     "count": len(events)
                 }
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(CALENDAR_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
-        
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
+
+        result = _add_missing_calendar_warning(
+            result,
+            calendar_name,
+            event_count=result.get("count", -1),
+        )
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
     
     elif name == "calendar_delete_event":
@@ -816,8 +850,7 @@ async def _handle_call_tool_inner(
                 "message": output
             }
         else:
-            result = {"success": False, "error": output}
-        
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
     
     elif name == "calendar_get_next_event":
@@ -843,10 +876,15 @@ async def _handle_call_tool_inner(
                         "next_event": event_data
                     }
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(CALENDAR_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
-        
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
+
+        result = _add_missing_calendar_warning(
+            result,
+            calendar_name,
+            event_count=0 if result.get("next_event") is None else 1,
+        )
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
     
     elif name == "calendar_get_events_with_attendees":
@@ -894,10 +932,15 @@ async def _handle_call_tool_inner(
                     "count": len(events)
                 }
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(CALENDAR_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
-        
+            result = _broken_feature_payload(CALENDAR_FEATURE, output)
+
+        result = _add_missing_calendar_warning(
+            result,
+            calendar_name,
+            event_count=result.get("count", -1),
+        )
         return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
     
     # --- Apple Reminders handlers ---
@@ -909,9 +952,9 @@ async def _handle_call_tool_inner(
                 items = json.loads(output)
                 result = {"success": True, "list": list_name, "items": items, "count": len(items)}
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(REMINDERS_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_complete_item":
@@ -923,7 +966,7 @@ async def _handle_call_tool_inner(
             except json.JSONDecodeError:
                 result = {"success": True, "message": output}
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_create_item":
@@ -938,7 +981,7 @@ async def _handle_call_tool_inner(
             except json.JSONDecodeError:
                 result = {"success": True, "message": output}
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_ensure_lists":
@@ -949,7 +992,7 @@ async def _handle_call_tool_inner(
             except json.JSONDecodeError:
                 result = {"success": True, "message": output}
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_list_completed":
@@ -960,9 +1003,9 @@ async def _handle_call_tool_inner(
                 items = json.loads(output)
                 result = {"success": True, "list": list_name, "items": items, "count": len(items)}
             except json.JSONDecodeError as e:
-                result = {"success": False, "error": f"JSON parse error: {e}"}
+                result = _broken_feature_payload(REMINDERS_FEATURE, f"JSON parse error: {e}")
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_find_and_complete":
@@ -975,7 +1018,7 @@ async def _handle_call_tool_inner(
             except json.JSONDecodeError:
                 result = {"success": True, "message": output}
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     elif name == "reminders_clear_completed":
@@ -987,7 +1030,7 @@ async def _handle_call_tool_inner(
             except json.JSONDecodeError:
                 result = {"success": True, "message": output}
         else:
-            result = {"success": False, "error": output}
+            result = _broken_feature_payload(REMINDERS_FEATURE, output)
         return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
     else:

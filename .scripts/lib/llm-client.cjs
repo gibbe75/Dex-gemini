@@ -76,7 +76,7 @@ async function generateWithGemini(prompt, options = {}) {
   const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
   
   const model = genAI.getGenerativeModel({
-    model: options.model || 'gemini-2.0-flash-thinking-exp-1219',
+    model: options.model || 'gemini-2.5-flash',
     generationConfig: {
       maxOutputTokens: options.maxOutputTokens || 4096,
       temperature: options.temperature || 1.0,
@@ -107,7 +107,9 @@ async function generateContent(prompt, options = {}) {
   
   if (!provider) {
     throw new Error(
-      'No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY in your .env file'
+      'No LLM API key found. Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GEMINI_API_KEY in the vault-root .env file '
+        + 'and keep that file owner-only (chmod 600 .env). Dex\'s encrypted credential store (/connect) does not '
+        + 'feed background LLM features yet, so .env is still the supported location for these keys.'
     );
   }
   

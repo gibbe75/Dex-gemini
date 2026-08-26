@@ -1,8 +1,15 @@
 ---
 name: week-plan
-description: Set weekly priorities and plan the week ahead with intelligent suggestions based on goals, calendar shape, and task effort.
-context: fork
+description: "Set the week's priorities against goals, calendar shape and task effort. Use when the user says 'plan my week', 'what should I focus on this week', or on their first working day. Also use proactively at the first session of a new week. Not for reviewing the week just past; use `week-review`."
 ---
+
+## Execution mode
+
+Run inline in the current conversation by default, so this work can see what the
+user has already discussed, decided, or settled this session. Do not fork merely
+because this skill was selected. Only run in the background when the user
+explicitly asks for a background run or the host has already obtained a specific
+background-work approval for this run.
 
 ## Purpose
 
@@ -10,7 +17,7 @@ Set priorities and plan the week ahead. Now with **intelligent priority suggesti
 
 ## Usage
 
-- `/week-plan` — Plan current week (or next week if run on Friday/weekend)
+- `/week-plan` — Plan current week (or next week if run on the last working day or a non-working day)
 - `/week-plan next` — Explicitly plan next week
 - `/week-plan current` — Force planning current week
 
@@ -19,15 +26,11 @@ Set priorities and plan the week ahead. Now with **intelligent priority suggesti
 ## When to Use
 
 **Best times:**
-- **Monday morning** - Before diving into daily work
-- **Friday evening** - Set up next week while context is fresh
-- **Sunday evening** - Weekend planning session
+- **First working day, before work** - Before diving into daily work
+- **Last working day, after work** - Set up next week while context is fresh
+- **Evening before the first working day** - Plan before the week begins
 
----
-
-## Step 0: Demo Mode Check
-
-Check `System/user-profile.yaml` for `demo_mode`. If true, use demo paths.
+Read `working_week.days` in `System/user-profile.yaml` before deciding which days are first, last, or outside the working week.
 
 ---
 
@@ -82,8 +85,12 @@ Get all open tasks and:
 ### 2.4 Calendar Shape Analysis (NEW)
 
 ```
+Use: calendar_get_events_with_attendees(start_date="[week start]", end_date="[day after week end]")
 Use: analyze_calendar_capacity(days_ahead=7, events=[...from calendar MCP...])
 ```
+
+Apply CLAUDE.md's **Calendar response confidence contract** before consuming
+events or passing them to `analyze_calendar_capacity`.
 
 Understand the **shape of the week**:
 
@@ -239,7 +246,7 @@ Create updated `02-Week_Priorities/Week_Priorities.md`:
 ```markdown
 # Week Priorities
 
-**Week of:** [Monday YYYY-MM-DD]
+**Week of:** [first working day YYYY-MM-DD]
 
 ---
 
@@ -339,7 +346,7 @@ Create updated `02-Week_Priorities/Week_Priorities.md`:
 
 ## 🏁 End of Week Review
 
-*Fill in on Friday*
+*Fill in on the last working day*
 
 ### Completed
 - 
@@ -394,7 +401,7 @@ After generating the file, provide a summary:
 > - [Capacity warning if applicable]
 > - [Stalled goal reminder]
 > 
-> Ready to run `/daily-plan` for Monday?"
+> Ready to run `/daily-plan` for your first working day?"
 
 ---
 
@@ -402,6 +409,6 @@ After generating the file, provide a summary:
 
 | Integration | MCP Server | Tools Used |
 |-------------|------------|------------|
-| Calendar | dex-calendar-mcp | `calendar_get_events_with_attendees` |
-| Work | dex-work-mcp | `list_tasks`, `get_quarterly_goals`, `get_goal_status`, `create_weekly_priority`, `analyze_calendar_capacity`, `classify_task_effort`, `suggest_task_scheduling`, `get_commitments_due` |
-| Granola | dex-granola-mcp | `get_upcoming_meetings` (optional) |
+| Calendar | calendar-mcp | `calendar_get_events_with_attendees` |
+| Work | work-mcp | `list_tasks`, `get_quarterly_goals`, `get_goal_status`, `create_weekly_priority`, `analyze_calendar_capacity`, `classify_task_effort`, `suggest_task_scheduling`, `get_commitments_due` |
+| Granola | granola-mcp | `granola_get_today_meetings` (optional) |

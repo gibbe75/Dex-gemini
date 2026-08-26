@@ -58,38 +58,42 @@ def _event(*, source_event_id: str, source_series_id: str, starts_at: datetime, 
 def test_confirmed_ritual_on_wednesday_generates_rest_of_week_prep():
     _cleanup_runtime_artifacts()
     service = RitualIntelligenceService()
-    wednesday = datetime(2026, 3, 11, 9, 0, tzinfo=timezone.utc)
-    friday = datetime(2026, 3, 13, 9, 0, tzinfo=timezone.utc)
+    # Relative dates so events always fall within the matcher's 28-day window (issue #44).
+    base = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
+    wednesday = base - timedelta(days=(base.weekday() - 2) % 7 + 7)
+    friday = wednesday + timedelta(days=2)
     service.refresh_calendar(events=[
         _event(source_event_id="wed", source_series_id="series-w", starts_at=wednesday),
         _event(source_event_id="fri", source_series_id="series-w", starts_at=friday),
     ])
 
     suggestions = service.list_ritual_suggestions()
-    result = confirm_ritual(suggestions[0]["series_id"], now=datetime(2026, 3, 11, 12, 0, tzinfo=timezone.utc))
+    result = confirm_ritual(suggestions[0]["series_id"], now=wednesday + timedelta(hours=3))
 
     assert result["status"] == "confirmed"
     assert len(result["generated"]) == 2
-    assert any("2026-03-11" in item["note_path"] for item in result["generated"])
-    assert any("2026-03-13" in item["note_path"] for item in result["generated"])
+    assert any(wednesday.strftime("%Y-%m-%d") in item["note_path"] for item in result["generated"])
+    assert any(friday.strftime("%Y-%m-%d") in item["note_path"] for item in result["generated"])
 
 
 def test_confirmed_ritual_on_friday_generates_next_week_prep_too():
     _cleanup_runtime_artifacts()
     service = RitualIntelligenceService()
-    friday = datetime(2026, 3, 13, 9, 0, tzinfo=timezone.utc)
-    monday_next = datetime(2026, 3, 16, 9, 0, tzinfo=timezone.utc)
+    # Relative dates so events always fall within the matcher's 28-day window (issue #44).
+    base = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
+    friday = base - timedelta(days=(base.weekday() - 4) % 7 + 7)
+    monday_next = friday + timedelta(days=3)
     service.refresh_calendar(events=[
         _event(source_event_id="fri-2", source_series_id="series-f", starts_at=friday),
         _event(source_event_id="mon-next", source_series_id="series-f", starts_at=monday_next),
     ])
 
     suggestions = service.list_ritual_suggestions()
-    result = confirm_ritual(suggestions[0]["series_id"], now=datetime(2026, 3, 13, 12, 0, tzinfo=timezone.utc))
+    result = confirm_ritual(suggestions[0]["series_id"], now=friday + timedelta(hours=3))
 
     assert result["status"] == "confirmed"
     assert len(result["generated"]) == 2
-    assert any("2026-03-16" in item["note_path"] for item in result["generated"])
+    assert any(monday_next.strftime("%Y-%m-%d") in item["note_path"] for item in result["generated"])
 
 
 def test_non_ritual_meetings_do_not_get_speculative_prep():
@@ -142,3 +146,30 @@ def test_user_edited_prep_block_locks_regeneration():
     with transaction(create=True) as conn:
         locked = conn.execute("SELECT user_locked FROM occurrences WHERE id = ?", (occurrence_id,)).fetchone()
     assert locked["user_locked"] == 1
+
+
+def test_confirmed_ritual_on_sunday_includes_that_same_evening():
+    """The horizon must reach the END of its last day, not `now`'s time-of-day.
+
+    A Sunday-morning confirmation would otherwise drop a Sunday-evening
+    occurrence: days_until_end_of_week is 0 on a Sunday, so the horizon
+    collapsed onto the current timestamp.
+    """
+    _cleanup_runtime_artifacts()
+    service = RitualIntelligenceService()
+    # Relative dates so events always fall within the matcher's 28-day window (issue #44).
+    base = datetime.now(timezone.utc).replace(hour=21, minute=0, second=0, microsecond=0)
+    sunday_evening = base - timedelta(days=(base.weekday() - 6) % 7 + 7)
+    previous_sunday = sunday_evening - timedelta(days=7)
+    service.refresh_calendar(events=[
+        _event(source_event_id="sun-prev", source_series_id="series-s", starts_at=previous_sunday),
+        _event(source_event_id="sun", source_series_id="series-s", starts_at=sunday_evening),
+    ])
+
+    suggestions = service.list_ritual_suggestions()
+    result = confirm_ritual(suggestions[0]["series_id"], now=sunday_evening.replace(hour=9))
+
+    assert result["status"] == "confirmed"
+    assert any(sunday_evening.strftime("%Y-%m-%d") in item["note_path"] for item in result["generated"]), (
+        "Sunday-evening occurrence was excluded by a horizon that stopped at Sunday morning"
+    )

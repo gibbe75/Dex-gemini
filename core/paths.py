@@ -17,11 +17,18 @@ import sys
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+# This module is a library that many entry points import, so it must not decide
+# where anyone's log output goes. Warning through the root logger did: it
+# installed a stderr handler as a side effect of being imported, and the notice
+# below then surfaced in the update bridge's own user-facing output, where it is
+# both alarming and irrelevant. A NullHandler keeps the notice available to any
+# program that configures logging, and silent in every program that does not.
+logger.addHandler(logging.NullHandler())
 
 # --- Vault root ---
 _vault_path = os.environ.get('VAULT_PATH')
 if not _vault_path:
-    logging.warning(
+    logger.warning(
         "VAULT_PATH not set — falling back to cwd(). "
         "Task ID generation may produce duplicates."
     )
@@ -66,25 +73,46 @@ INTEL_DIR = RESOURCES_DIR / 'Intel'
 MEETING_INTEL_DIR = INTEL_DIR / 'Meeting_Intel'
 LEARNINGS_DIR = RESOURCES_DIR / 'Learnings'
 
+# --- Derived: DexDiff (contract keys, see docs/dexdiff-runtime-boundary.md) ---
+DEXDIFF_DIR = PROJECTS_DIR / 'DexDiff'
+DEXDIFF_BETA_DIR = DEXDIFF_DIR / 'beta'
+DEXDIFF_DIFFS_DIR = DEXDIFF_BETA_DIR / 'diffs'
+DEXDIFF_PROFILE_DRAFTS_DIR = DEXDIFF_BETA_DIR / 'profile'
+DEXDIFF_DESIGN_DIR = DEXDIFF_DIR / 'design'
+
 # --- System ---
 SYSTEM_DIR = VAULT_ROOT / 'System'
 DEX_RUNTIME_DIR = SYSTEM_DIR / '.dex'
+LIFECYCLE_DIR = DEX_RUNTIME_DIR / 'lifecycle'
+LEDGER_DIR = LIFECYCLE_DIR / 'ledger'
+LEDGER_EVENTS_DIR = LEDGER_DIR / 'events'
+LIFECYCLE_STATE_FILE = LIFECYCLE_DIR / 'state.json'
+
+
+HISTORY_BACKUPS_RELATIVE_PARTS = ('System', '.dex', 'adoption', 'history-backups')
 PILLARS_FILE = SYSTEM_DIR / 'pillars.yaml'
 USER_PROFILE_FILE = SYSTEM_DIR / 'user-profile.yaml'
 SKILL_RATINGS_FILE = SYSTEM_DIR / 'Skill_Ratings' / 'ratings.jsonl'
 PEOPLE_INDEX_FILE = SYSTEM_DIR / 'People_Index.json'
+COMPANY_INDEX_FILE = SYSTEM_DIR / 'Company_Index.json'
 MEETING_CACHE_FILE = SYSTEM_DIR / 'Memory' / 'meeting-cache.json'
-DEMO_DIR = SYSTEM_DIR / 'Demo'
-STATE_FILE = SYSTEM_DIR / '.demo-mode-state.json'
 SESSION_FILE = SYSTEM_DIR / '.onboarding-session.json'
 MARKER_FILE = SYSTEM_DIR / '.onboarding-complete'
 USER_PROFILE_TEMPLATE = SYSTEM_DIR / 'user-profile-template.yaml'
+INTEGRATION_CONFIG_FILE = SYSTEM_DIR / 'integrations' / 'config.yaml'
+TASK_SYNC_STATE_FILE = SYSTEM_DIR / 'integrations' / '.sync-state.json'
+INBOUND_TASKS_FILE = SYSTEM_DIR / 'integrations' / 'inbound-tasks.json'
 CLAUDE_MD = VAULT_ROOT / 'CLAUDE.md'
 MCP_CONFIG_EXAMPLE = SYSTEM_DIR / '.mcp.json.example'
-MCP_CONFIG_TARGET = SYSTEM_DIR / '.mcp.json'
-COMMITMENT_QUEUE_FILE = SYSTEM_DIR / 'commitment_queue.json'
+MCP_CONFIG_TARGET = VAULT_ROOT / '.mcp.json'
 OBSIDIAN_SYNC_LOG = SYSTEM_DIR / 'obsidian-sync.log'
+SESSION_MEMORY_DB_FILE = SYSTEM_DIR / '.dex-sessions.db'
 RITUAL_INTELLIGENCE_DB_FILE = DEX_RUNTIME_DIR / 'ritual-intelligence.db'
+CONTACTS_STATE_FILE = DEX_RUNTIME_DIR / 'contacts.json'
+GARDENER_STATE_FILE = DEX_RUNTIME_DIR / 'gardener.json'
+ENTITY_SUGGESTIONS_FILE = DEX_RUNTIME_DIR / 'entity-suggestions.json'
+ENTITY_PENDING_FILE = DEX_RUNTIME_DIR / 'entity-pending.json'
+ENTITY_VERIFICATION_FILE = DEX_RUNTIME_DIR / 'entity-verification.json'
 
 
 def export_json(output_path: str | Path | None = None) -> dict:

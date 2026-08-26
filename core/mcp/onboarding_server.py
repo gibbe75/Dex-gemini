@@ -13,6 +13,7 @@ Features:
 - PARA folder structure creation
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -20,14 +21,10 @@ import platform
 import re
 import subprocess
 import sys
-from datetime import date, datetime
+import tempfile
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-
-try:
-    import yaml
-except ImportError:
-    yaml = None
 
 import mcp.server.stdio
 import mcp.types as types
@@ -49,20 +46,75 @@ class DateTimeEncoder(json.JSONEncoder):
 _repo_root = str(Path(__file__).parent.parent.parent)
 if _repo_root not in sys.path:
     sys.path.append(_repo_root)
+from core import capabilities as capability_rooms
+from core.lifecycle import service as lifecycle_service
+from core.mcp.analytics_receipts import (
+    surface_analytics_attempt,
+    unavailable_analytics_delivery,
+)
 from core.paths import (
-    CLAUDE_MD,
     MARKER_FILE,
     MCP_CONFIG_EXAMPLE,
-    MCP_CONFIG_TARGET,
-    PILLARS_FILE,
     SESSION_FILE,
-    USER_PROFILE_FILE,
-    USER_PROFILE_TEMPLATE,
 )
 from core.paths import (
     VAULT_ROOT as BASE_DIR,
 )
+from core.transaction.engine import PlanRejected
+from core.utils.nudge_calendar import build_nudge_calendar, is_dex_nudge_event
 
+
+def _analytics_helper_unavailable_result() -> dict[str, object]:
+    """Return only the fixed safe outcome when the shared helper cannot load."""
+    return unavailable_analytics_delivery()
+
+
+try:
+    from core.mcp.analytics_helper import fire_event as _fire_analytics_event
+    HAS_ANALYTICS = True
+except ImportError:
+    HAS_ANALYTICS = False
+
+    def _fire_analytics_event(event_name, properties=None):
+        return _analytics_helper_unavailable_result()
+
+# User-configured working week (defaults to Monday-Friday)
+try:
+    from core.utils.working_week import (
+        DEFAULT_WORKING_DAYS,
+        first_working_day_of_week,
+        normalize_working_days,
+        working_day_names,
+    )
+except ImportError:
+    DEFAULT_WORKING_DAYS = frozenset({0, 1, 2, 3, 4})
+
+    def first_working_day_of_week(target_date):
+        return target_date - timedelta(days=target_date.weekday())
+
+    def normalize_working_days(_configured_days):
+        return []
+
+    def working_day_names():
+        return ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+
+GRANOLA_APP_PATH = Path("/Applications/Granola.app")
+ONBOARDING_STEPS = 8
+REQUIRED_ONBOARDING_STEPS = tuple(range(1, 8))
+STEP_NAMES = {
+    1: "name",
+    2: "role",
+    3: "company size",
+    4: "email domain",
+    5: "strategic pillars",
+    6: "communication preferences",
+    7: "working week",
+    8: "optional rooms",
+}
+CALENDAR_REQUIRED_ERROR = (
+    "Connect the calendar first (or skip it explicitly with "
+    "save_calendar_selection(skipped=true)) — setup opens with the calendar."
+)
 # Role definitions for validation
 ROLES = {
     1: ("Product Manager", "product"),
@@ -98,10 +150,58 @@ ROLES = {
     31: ("Venture Capital / Private Equity", "advisory"),
 }
 
+ROLE_AREAS = {
+    "Product": (1, 8, 22, 28),
+    "Sales": (2, 7, 20),
+    "Marketing": (3, 19),
+    "Engineering / Data / IT": (4, 10, 14, 21, 23, 24),
+    "Design": (5,),
+    "Customer Success": (6, 27),
+    "Operations / Finance / People / Legal": (9, 11, 12, 13, 17, 18, 25, 26),
+    "Leadership / Exec / Advisory": (15, 16, 29, 30, 31),
+}
+
 COMPANY_SIZES = ["startup", "scaling", "enterprise", "large_enterprise"]
 FORMALITY_LEVELS = ["formal", "professional_casual", "casual"]
 DIRECTNESS_LEVELS = ["very_direct", "balanced", "supportive"]
 CAREER_LEVELS = ["junior", "mid", "senior", "leadership", "c_suite"]
+ROLE_EMAIL_LOCALS = {
+    "accounts",
+    "admin",
+    "administrator",
+    "billing",
+    "careers",
+    "contact",
+    "customerservice",
+    "enquiries",
+    "enquiry",
+    "events",
+    "finance",
+    "hello",
+    "help",
+    "hr",
+    "info",
+    "jobs",
+    "legal",
+    "mail",
+    "marketing",
+    "media",
+    "noreply",
+    "notifications",
+    "office",
+    "partners",
+    "partnerships",
+    "people",
+    "press",
+    "privacy",
+    "recruiting",
+    "recruitment",
+    "sales",
+    "security",
+    "service",
+    "support",
+    "team",
+}
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -163,33 +263,125 @@ def create_new_session() -> Dict:
         "data": {}
     }
 
-def validate_email_domain(domain: str) -> tuple[bool, Optional[str]]:
-    """Validate email domain format (supports multiple domains separated by commas)"""
+
+def _calendar_addressed(session: Dict[str, Any]) -> bool:
+    """Return whether calendar setup was validated or explicitly skipped."""
+    return session.get("calendar_addressed") is True or bool(
+        session.get("data", {}).get("calendar")
+    )
+
+
+def _approved_profile_session_data(session: Dict[str, Any]) -> Dict[str, Any]:
+    """Exclude context that requires a separate explicit lifecycle approval."""
+    data = dict(session["data"])
+    for field in ("calendar", "calendar_source", "work_email", "working_context"):
+        data.pop(field, None)
+    return data
+
+
+def _next_required_step_before(
+    step_number: int,
+    completed_steps: List[int],
+) -> Optional[int]:
+    """Return the first incomplete required step below the requested step."""
+    if step_number in completed_steps:
+        return None
+    return next(
+        (
+            required_step
+            for required_step in REQUIRED_ONBOARDING_STEPS
+            if required_step < step_number and required_step not in completed_steps
+        ),
+        None,
+    )
+
+
+def default_working_week_suggestion() -> Dict[str, Any]:
+    """Return the visible fallback when recent calendar evidence is unavailable."""
+    days = normalize_working_days(sorted(DEFAULT_WORKING_DAYS))
+    if not days:
+        days = [day.casefold() for day in working_day_names()]
+    return {
+        "days": days,
+        "basis": "default",
+        # Never claim a check Dex did not run: today nothing reads several weeks
+        # of calendar history, so the honest line is that it has not worked this
+        # out, not that it looked and found too little.
+        "reason": "Dex hasn't worked this out from your calendar.",
+    }
+
+
+def validate_email_domain(domain: str) -> tuple[bool, Optional[str], str]:
+    """Validate and normalize email domains separated by commas"""
     if not domain or not domain.strip():
-        return False, "Email domain cannot be empty"
-    
-    domain = domain.strip()
-    
-    # Check for @ symbol
-    if '@' in domain:
-        return False, "Domain should not include @ symbol (e.g., 'pendo.io' not '@pendo.io')"
-    
-    # Split by comma if multiple domains
-    domains = [d.strip() for d in domain.split(',')]
-    
-    for d in domains:
+        return False, "Email domain cannot be empty", ""
+
+    domains = []
+    for raw_domain in domain.split(','):
+        d = raw_domain.strip()
         if not d:
             continue
-        
+
+        if d.startswith('@'):
+            d = d[1:]
+        if '@' in d:
+            d = d.rsplit('@', 1)[1]
+        d = d.strip()
+
+        if not d or '@' in d:
+            return False, f"Could not determine a domain from '{raw_domain.strip()}'", ""
+
         # Check for at least one dot (basic domain validation)
         if '.' not in d:
-            return False, f"Domain '{d}' should include at least one dot (e.g., 'acme.com')"
-        
+            return False, f"Domain '{d}' should include at least one dot (e.g., 'acme.com')", ""
+
         # Check for valid characters (alphanumeric, dots, hyphens)
         if not re.match(r'^[a-zA-Z0-9\-\.]+$', d):
-            return False, f"Domain '{d}' contains invalid characters"
-    
-    return True, None
+            return False, f"Domain '{d}' contains invalid characters", ""
+
+        domains.append(d)
+
+    if not domains:
+        return False, "Email domain cannot be empty", ""
+
+    return True, None, ", ".join(domains)
+
+
+def derive_identity_from_email(address: str) -> Dict[str, Optional[str]]:
+    """Return only identity details that are safe to offer for confirmation."""
+    empty_identity = {"name": None, "domain": None}
+    if not isinstance(address, str):
+        return empty_identity
+
+    cleaned = address.strip()
+    if cleaned.count("@") != 1:
+        return empty_identity
+
+    local_part, domain = cleaned.split("@", 1)
+    if (
+        not local_part
+        or local_part.startswith(".")
+        or local_part.endswith(".")
+        or ".." in local_part
+        or re.fullmatch(r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~.-]+", local_part) is None
+    ):
+        return empty_identity
+
+    valid_domain, _, normalized_domain = validate_email_domain(domain)
+    if not valid_domain:
+        return empty_identity
+
+    first_token = local_part.split(".", 1)[0].lower()
+    name = None
+    if (
+        len(first_token) >= 3
+        and first_token.isalpha()
+        and first_token not in ROLE_EMAIL_LOCALS
+    ):
+        name = first_token.title()
+
+    return {"name": name, "domain": normalized_domain.lower()}
+
 
 def validate_pillars(pillars: List[str]) -> tuple[bool, Optional[str]]:
     """Validate strategic pillars"""
@@ -262,296 +454,383 @@ def check_calendar_app() -> Dict[str, Any]:
         }
 
 def check_granola() -> Dict[str, Any]:
-    """Check if Granola is installed (auto-detects latest cache version)"""
-    import re as _re
+    """Check whether the Granola desktop application is installed."""
+    if platform.system() == 'Darwin' and GRANOLA_APP_PATH.exists():
+        return {
+            "installed": True,
+            "app_found": True,
+            "path": str(GRANOLA_APP_PATH),
+            "setup": "/granola-setup",
+        }
 
-    def _find_latest(granola_dir):
-        candidates = sorted(
-            granola_dir.glob("cache-v*.json"),
-            key=lambda p: int(_re.search(r'v(\d+)', p.name).group(1))
-            if _re.search(r'v(\d+)', p.name) else 0,
-            reverse=True
-        )
-        for c in candidates:
-            if c.exists():
-                return c
-        return None
+    return {
+        "installed": False,
+        "app_found": False,
+        "optional": True,
+        "setup": "/granola-setup",
+    }
 
-    # Check common Granola cache locations
-    if platform.system() == 'Darwin':
-        granola_dir = Path.home() / 'Library' / 'Application Support' / 'Granola'
-    elif platform.system() == 'Windows':
-        appdata = os.getenv('APPDATA') or os.getenv('LOCALAPPDATA')
-        if appdata:
-            granola_dir = Path(appdata) / 'Granola'
-        else:
-            granola_dir = None
-    else:  # Linux
-        granola_dir = Path.home() / '.config' / 'Granola'
+def _capability_states(
+    selected: Dict[str, bool] | None = None,
+) -> Dict[str, bool]:
+    selected = selected or {}
+    states: Dict[str, bool] = {}
+    for room in capability_rooms.room_ids():
+        if room in selected:
+            states[room] = selected[room] is True
+            continue
+        default = capability_rooms.surfaces_for(room).get("default_enabled", False)
+        states[room] = default if isinstance(default, bool) else False
+    return states
 
-    if granola_dir:
-        cache_path = _find_latest(granola_dir)
-        if cache_path:
-            return {"installed": True, "cache_found": True, "path": str(cache_path)}
 
-    return {"installed": False, "optional": True}
-
-def create_para_structure(base_path: Path) -> List[str]:
-    """Create PARA folder structure"""
-    folders = [
-        "04-Projects",
-        "05-Areas/People/Internal",
-        "05-Areas/People/External",
-        "05-Areas/Companies",
-        "00-Inbox/Meetings",
-        "00-Inbox/Ideas",
-        "06-Resources/Learnings",
-        "06-Resources/Quarterly_Reviews",
-        "07-Archives/04-Projects",
-        "07-Archives/Plans",
-        "07-Archives/Reviews",
-        "System/Templates",
-        "01-Quarter_Goals",
-        "03-Tasks",
-        "02-Week_Priorities"
+def _run_onboarding_provisioner(
+    session: Dict,
+    *,
+    dry_run: bool,
+) -> Dict[str, Any]:
+    """Return the sanctioned provisioner's receipt for preview or commit."""
+    data = _approved_profile_session_data(session)
+    data["pillars"] = [
+        {"name": pillar, "description": ""}
+        for pillar in data.get("pillars", [])
     ]
-    
-    created = []
-    for folder in folders:
-        folder_path = base_path / folder
-        if not folder_path.exists():
-            folder_path.mkdir(parents=True, exist_ok=True)
-            created.append(folder)
-    
-    return created
-
-def create_initial_files(base_path: Path, session_data: Dict) -> List[str]:
-    """Create initial state files"""
-    created = []
-    
-    # Create Tasks.md
-    tasks_file = base_path / '03-Tasks' / 'Tasks.md'
-    if not tasks_file.exists():
-        tasks_content = """# Tasks
-
-## Instructions
-- Tasks are organized by pillar and priority
-- Use task IDs (^task-YYYYMMDD-XXX) for cross-file sync
-- Priorities: P0 (urgent), P1 (important), P2 (normal), P3 (low)
-
----
-
-"""
-        # Add pillar sections
-        for pillar in session_data['data'].get('pillars', []):
-            pillar_id = pillar.lower().replace(' ', '-')
-            tasks_content += f"## {pillar} #{pillar_id}\n\n"
-        
-        tasks_file.write_text(tasks_content)
-        created.append('03-Tasks/Tasks.md')
-    
-    # Create Week_Priorities.md
-    priorities_file = base_path / '02-Week_Priorities' / 'Week_Priorities.md'
-    if not priorities_file.exists():
-        priorities_content = """# Week Priorities
-
-*Updated: Week of [date]*
-
-## This Week's Focus
-
-### Top 3 Priorities
-
-1. 
-2. 
-3. 
-
----
-
-"""
-        priorities_file.write_text(priorities_content)
-        created.append('02-Week_Priorities/Week_Priorities.md')
-    
-    return created
-
-def create_user_profile(session_data: Dict) -> bool:
-    """Create user-profile.yaml from session data"""
+    selected = _capability_states(data.get("capabilities"))
+    data["capabilities"] = {
+        room: {"enabled": selected[room]}
+        for room in capability_rooms.room_ids()
+    }
+    profile_path: Path | None = None
     try:
-        # Load template
-        if not USER_PROFILE_TEMPLATE.exists():
-            logger.error("user-profile-template.yaml not found")
-            return False
-        
-        with open(USER_PROFILE_TEMPLATE, 'r') as f:
-            profile = yaml.safe_load(f) if yaml else {}
-        
-        # Update with session data
-        data = session_data['data']
-        profile['name'] = data.get('name', '')
-        profile['role'] = data.get('role', '')
-        profile['role_group'] = data.get('role_group', '')
-        profile['company'] = data.get('company', '')
-        profile['company_size'] = data.get('company_size', '')
-        profile['email_domain'] = data.get('email_domain', '')
-        
-        # Update Obsidian mode (defaults to false)
-        profile['obsidian_mode'] = data.get('obsidian_mode', False)
-        
-        # Update communication preferences
-        comm = data.get('communication', {})
-        if 'communication' not in profile:
-            profile['communication'] = {}
-        profile['communication']['formality'] = comm.get('formality', 'professional_casual')
-        profile['communication']['directness'] = comm.get('directness', 'balanced')
-        profile['communication']['career_level'] = comm.get('career_level', 'mid')
-        profile['communication']['coaching_style'] = comm.get('coaching_style', 'collaborative')
-        
-        # Save
-        with open(USER_PROFILE_FILE, 'w') as f:
-            yaml.dump(profile, f, default_flow_style=False, sort_keys=False)
-        
-        return True
-    except Exception as e:
-        logger.error(f"Error creating user profile: {e}")
-        return False
-
-def create_pillars_file(pillars: List[str]) -> bool:
-    """Create pillars.yaml from pillar list"""
-    try:
-        pillars_data = {"pillars": []}
-        
-        for pillar in pillars:
-            pillar_id = pillar.lower().replace(' ', '-').replace('_', '-')
-            pillars_data["pillars"].append({
-                "id": pillar_id,
-                "name": pillar,
-                "description": ""
-            })
-        
-        with open(PILLARS_FILE, 'w') as f:
-            yaml.dump(pillars_data, f, default_flow_style=False, sort_keys=False)
-        
-        return True
-    except Exception as e:
-        logger.error(f"Error creating pillars file: {e}")
-        return False
-
-def update_claude_md(session_data: Dict) -> bool:
-    """Update CLAUDE.md User Profile section"""
-    try:
-        if not CLAUDE_MD.exists():
-            logger.error("CLAUDE.md not found")
-            return False
-        
-        content = CLAUDE_MD.read_text()
-        data = session_data['data']
-        
-        # Find and replace User Profile section
-        profile_section = f"""## User Profile
-
-<!-- Updated during onboarding -->
-**Name:** {data.get('name', 'Not configured')}
-**Role:** {data.get('role', 'Not configured')}
-**Company Size:** {data.get('company_size', 'Not configured')}
-**Working Style:** {data.get('communication', {}).get('formality', 'Not configured')}
-**Pillars:**
-"""
-        for pillar in data.get('pillars', []):
-            profile_section += f"- {pillar}\n"
-        
-        # Replace between "## User Profile" and next "---"
-        pattern = r'## User Profile.*?---'
-        replacement = profile_section + "\n---"
-        content = re.sub(pattern, replacement, content, flags=re.DOTALL)
-        
-        CLAUDE_MD.write_text(content)
-        return True
-    except Exception as e:
-        logger.error(f"Error updating CLAUDE.md: {e}")
-        return False
-
-def setup_mcp_config(vault_path: Path) -> tuple[bool, Optional[str]]:
-    """Setup .mcp.json by replacing {{VAULT_PATH}} in example"""
-    try:
-        if not MCP_CONFIG_EXAMPLE.exists():
-            return False, ".mcp.json.example not found"
-        
-        # Read example
-        with open(MCP_CONFIG_EXAMPLE, 'r') as f:
-            config_content = f.read()
-        
-        # Replace {{VAULT_PATH}} with actual path
-        config_content = config_content.replace('{{VAULT_PATH}}', str(vault_path))
-        
-        # Validate JSON
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix="dex-onboarding-profile-",
+            suffix=".json",
+            delete=False,
+        ) as profile:
+            profile_path = Path(profile.name)
+            json.dump(data, profile, cls=DateTimeEncoder)
+            profile.write("\n")
+        provisioner = Path(__file__).parent.parent / "provision.cjs"
+        node = os.environ.get("DEX_PROVISION_NODE", "node")
+        command = [
+            node,
+            str(provisioner),
+            "--path",
+            str(BASE_DIR),
+            "--profile",
+            str(profile_path),
+            "--onboard",
+            "--session-file",
+            str(SESSION_FILE),
+        ]
+        if dry_run:
+            command.append("--dry-run")
+        command.append("--json")
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).parent.parent.parent,
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+            env={**os.environ, "DEX_LIFECYCLE_PYTHON": sys.executable},
+        )
         try:
-            json.loads(config_content)
-        except json.JSONDecodeError as e:
-            return False, f"Invalid JSON after substitution: {e}"
-        
-        # Write to target
-        with open(MCP_CONFIG_TARGET, 'w') as f:
-            f.write(config_content)
-        
-        return True, None
-    except Exception as e:
-        return False, str(e)
+            receipt = json.loads(completed.stdout)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("Provisioner returned an invalid receipt") from error
+        if completed.returncode != 0 or receipt.get("ok") is not True:
+            detail = "; ".join(receipt.get("errors", [])) or completed.stderr.strip()
+            raise RuntimeError(detail or "Provisioner refused onboarding")
+        return receipt
+    finally:
+        if profile_path is not None:
+            profile_path.unlink(missing_ok=True)
+
+
+def _finalize_through_provisioner(session: Dict) -> Dict[str, Any]:
+    """Collect onboarding inputs and let the sanctioned provisioner mutate."""
+    receipt = _run_onboarding_provisioner(session, dry_run=False)
+    created = receipt.get("created", [])
+    folders = [relative for relative in created if (BASE_DIR / relative).is_dir()]
+    files = [relative for relative in created if (BASE_DIR / relative).is_file()]
+    return {
+        "executor": "core/provision.cjs",
+        "lifecycle_executor": receipt.get("lifecycle_executor"),
+        "folders_created": folders,
+        "files_created": files,
+        "configs_updated": [
+            relative for relative in ("CLAUDE.md", ".mcp.json") if relative in created
+        ],
+        "errors": [],
+        "receipt": receipt,
+    }
+
+
+def _preview_through_provisioner(session: Dict) -> Dict[str, Any]:
+    """Describe the exact read-only plan produced by the real provisioner."""
+    receipt = _run_onboarding_provisioner(session, dry_run=True)
+    created = [str(relative) for relative in receipt.get("created", [])]
+    created_folders = [
+        relative
+        for relative in created
+        if any(
+            other != relative and other.startswith(f"{relative.rstrip('/')}/")
+            for other in created
+        )
+    ]
+    created_folder_set = set(created_folders)
+    created_files = [
+        relative for relative in created if relative not in created_folder_set
+    ]
+    skipped = [str(relative) for relative in receipt.get("skipped-existing", [])]
+    would_create_files = [
+        relative for relative in created_files if not (BASE_DIR / relative).exists()
+    ]
+    would_update_files = [
+        relative for relative in created_files if (BASE_DIR / relative).is_file()
+    ]
+    return {
+        "would_create_folders": created_folders,
+        "already_exist_folders": [
+            relative for relative in skipped if (BASE_DIR / relative).is_dir()
+        ],
+        "would_create_files": would_create_files,
+        "already_exist_files": [
+            relative for relative in skipped if (BASE_DIR / relative).is_file()
+        ],
+        "would_update_configs": [
+            label
+            for relative, label in (
+                ("CLAUDE.md", "CLAUDE.md (User Profile section)"),
+                (".mcp.json", ".mcp.json"),
+            )
+            if relative in created_files
+        ],
+        "would_update_files": would_update_files,
+        "would_delete_session": "System/.onboarding-session.json"
+        in receipt.get("removed", []),
+        "provision_receipt": receipt,
+    }
+
+
+def _onboarding_package_version() -> str | None:
+    try:
+        package = json.loads((BASE_DIR / "package.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    version = package.get("version") if isinstance(package, dict) else None
+    return version if isinstance(version, str) and version else None
 
 # ============================================================================
 # PRE-ANALYSIS HELPER FUNCTIONS
 # ============================================================================
 
+def _load_first_week_profile() -> Dict[str, Any]:
+    """Load finalized or in-progress profile data for calendar analysis."""
+    profile = {}
+    profile_path = BASE_DIR / 'System' / 'user-profile.yaml'
+    if profile_path.exists():
+        try:
+            import yaml
+            profile = yaml.safe_load(profile_path.read_text(encoding='utf-8')) or {}
+        except Exception as e:
+            logger.warning(f"Failed to load user profile for first-week analysis: {e}")
+
+    session = load_session()
+    if session and isinstance(session.get('data'), dict):
+        profile.update(session['data'])
+    return profile
+
+
+def _calendar_event_datetime(value: Any) -> Optional[datetime]:
+    """Return a timed calendar value as datetime; date-only values are all-day."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return None
+    if not isinstance(value, str):
+        return None
+
+    cleaned = value.strip()
+    if re.fullmatch(r'\d{4}-\d{2}-\d{2}', cleaned):
+        return None
+    try:
+        return datetime.fromisoformat(
+            cleaned.replace('Z', '+00:00').replace(' +0000', '+00:00')
+        )
+    except ValueError:
+        return None
+
+
+def _timed_calendar_events(events: List[Dict]) -> List[Dict]:
+    """Exclude all-day and malformed events from meeting analysis."""
+    timed_events = []
+    for event in events:
+        if is_dex_nudge_event(event):
+            continue
+        if event.get('all_day') is True:
+            continue
+        if (
+            _calendar_event_datetime(event.get('start')) is None
+            or _calendar_event_datetime(event.get('end')) is None
+        ):
+            continue
+        timed_events.append(event)
+    return timed_events
+
+
+def _meeting_attendees(meeting: Dict) -> List[Dict]:
+    """Return participants from Calendar or Granola's normalized shapes."""
+    return meeting.get('attendees') or meeting.get('participants') or []
+
+
 def get_calendar_events_for_week() -> List[Dict]:
     """
     Get calendar events for the current week by importing and calling calendar MCP.
-    Returns empty list if calendar not available.
+    Raises with an honest reason when Calendar is unavailable; an empty list means
+    the query succeeded and the user genuinely has no meetings this week.
     """
+    if platform.system() != 'Darwin':
+        raise RuntimeError(
+            "First-week calendar analysis is currently available only on macOS."
+        )
+
     try:
-        # Import calendar server functions
         calendar_server_path = BASE_DIR / 'core' / 'mcp' / 'calendar_server.py'
         if not calendar_server_path.exists():
-            logger.warning("calendar_server.py not found")
-            return []
+            raise RuntimeError("Calendar support is not installed in this vault.")
+
+        profile = _load_first_week_profile()
+        calendar_config = profile.get('calendar', {})
+        if calendar_config.get('permissions_pending') is True:
+            raise RuntimeError("Calendar access was skipped or permission is not available.")
         
-        # Dynamic import to avoid circular dependencies
         import importlib.util
         spec = importlib.util.spec_from_file_location("calendar_server", calendar_server_path)
+        if spec is None or spec.loader is None:
+            raise RuntimeError("Calendar support could not be loaded.")
         calendar_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(calendar_module)
         
-        # Get this week's events
-        from datetime import timedelta
         today = datetime.now()
         start = today - timedelta(days=today.weekday())
         end = start + timedelta(days=7)
-        
-        events = calendar_module.get_events_for_range(start, end)
-        return events if events else []
+
+        calendar_name = (
+            calendar_config.get('work_calendar')
+            or profile.get('work_email')
+            or calendar_module.DEFAULT_WORK_CALENDAR
+        )
+        midnight = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        start_offset = (
+            start.replace(hour=0, minute=0, second=0, microsecond=0) - midnight
+        ).days
+        end_offset = (
+            end.replace(hour=0, minute=0, second=0, microsecond=0) - midnight
+        ).days
+        success, output = calendar_module.run_shell_script(
+            "calendar_eventkit.py",
+            "attendees",
+            calendar_name,
+            str(start_offset),
+            str(end_offset),
+        )
+        if not success:
+            raise RuntimeError(output or "Calendar data could not be read.")
+
+        events = json.loads(output)
+        if not isinstance(events, list):
+            raise RuntimeError("Calendar returned an invalid event list.")
+        return events
     except Exception as e:
         logger.warning(f"Failed to get calendar events: {e}")
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(str(e) or "Calendar data could not be read.") from e
+
+
+def get_calendar_events_for_entity_offer(days_back: int = 28) -> List[Dict]:
+    """Read recent calendar evidence for entity qualification."""
+    if days_back < 1:
+        return []
+    if platform.system() != 'Darwin':
+        return []
+
+    try:
+        calendar_server_path = BASE_DIR / 'core' / 'mcp' / 'calendar_server.py'
+        if not calendar_server_path.exists():
+            return []
+
+        profile = _load_first_week_profile()
+        calendar_config = profile.get('calendar', {})
+        if calendar_config.get('permissions_pending') is True:
+            return []
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "calendar_server_entity_offer",
+            calendar_server_path,
+        )
+        if spec is None or spec.loader is None:
+            return []
+        calendar_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(calendar_module)
+
+        calendar_name = (
+            calendar_config.get('work_calendar')
+            or profile.get('work_email')
+            or calendar_module.DEFAULT_WORK_CALENDAR
+        )
+        success, output = calendar_module.run_shell_script(
+            "calendar_eventkit.py",
+            "attendees",
+            calendar_name,
+            str(-(days_back - 1)),
+            "1",
+        )
+        if not success:
+            return []
+        events = json.loads(output)
+        return events if isinstance(events, list) else []
+    except Exception as error:
+        logger.warning("Could not read calendar history for entity offer: %s", error)
         return []
 
 def analyze_calendar_events(events: List[Dict]) -> Dict:
     """Analyze calendar events to extract insights"""
-    if not events:
-        return {}
+    timed_events = _timed_calendar_events(events)
     
     # Count meetings
-    total = len(events)
+    total = len(timed_events)
+
+    total_seconds = 0.0
+    for event in timed_events:
+        start = _calendar_event_datetime(event.get('start'))
+        end = _calendar_event_datetime(event.get('end'))
+        try:
+            total_seconds += max(0.0, (end - start).total_seconds())
+        except (TypeError, AttributeError):
+            continue
     
     # Count 1:1s (events with 2 attendees)
-    one_on_ones = sum(1 for e in events if len(e.get('attendees', [])) == 2)
+    one_on_ones = sum(1 for e in timed_events if len(_meeting_attendees(e)) == 2)
     
     # Find busiest day
     day_counts = {}
-    for event in events:
-        day = event['start'].strftime('%A')
+    for event in timed_events:
+        day = _calendar_event_datetime(event.get('start')).strftime('%A')
         day_counts[day] = day_counts.get(day, 0) + 1
-    busiest_day = max(day_counts.items(), key=lambda x: x[1]) if day_counts else ('Unknown', 0)
+    busiest_day = max(day_counts.items(), key=lambda x: x[1]) if day_counts else ('', 0)
     
     # Get frequent attendees (excluding self)
     attendee_counts = {}
-    for event in events:
-        for attendee in event.get('attendees', []):
+    for event in timed_events:
+        for attendee in _meeting_attendees(event):
+            if attendee.get('is_current_user') is True:
+                continue
             email = attendee.get('email', '')
             name = attendee.get('name', email)
             if email and name:
@@ -562,17 +841,124 @@ def analyze_calendar_events(events: List[Dict]) -> Dict:
     
     return {
         'total_meetings': total,
+        'meeting_hours': round(total_seconds / 3600, 2),
         'one_on_ones': one_on_ones,
         'busiest_day': busiest_day[0],
         'busiest_day_count': busiest_day[1],
         'top_people': [{'email': email, 'count': count} for email, count in top_people]
     }
 
+
+def build_pillar_evidence(events: List[Dict], email_domain: str) -> Dict[str, Any]:
+    """Summarize timed calendar evidence without inferring strategic pillars."""
+    timed_events = _timed_calendar_events(events)
+    calendar_analysis = analyze_calendar_events(timed_events)
+
+    calendar_series = {}
+    for event in timed_events:
+        provider_series_id = event.get('provider_series_id')
+        if not provider_series_id:
+            continue
+
+        title = (event.get('title') or 'Untitled meeting').strip()
+        commitment = calendar_series.setdefault(
+            str(provider_series_id),
+            {
+                'title': title,
+                'meeting_count': 0,
+                'meeting_seconds': 0.0,
+            },
+        )
+        commitment['meeting_count'] += 1
+        start = _calendar_event_datetime(event.get('start'))
+        end = _calendar_event_datetime(event.get('end'))
+        commitment['meeting_seconds'] += max(0.0, (end - start).total_seconds())
+
+    recurring_commitments = [
+        {
+            'title': commitment['title'],
+            'meeting_count': commitment['meeting_count'],
+            'meeting_hours': round(commitment['meeting_seconds'] / 3600, 2),
+        }
+        for commitment in sorted(
+            (
+                commitment
+                for commitment in calendar_series.values()
+                if commitment['meeting_count'] > 1
+            ),
+            key=lambda item: (
+                -item['meeting_count'],
+                -item['meeting_seconds'],
+                item['title'].casefold(),
+            ),
+        )[:3]
+    ]
+
+    internal_domains = {
+        domain.strip().lower()
+        for domain in email_domain.split(',')
+        if domain.strip()
+    }
+    meeting_split = {
+        'internal_meeting_count': 0,
+        'external_meeting_count': 0,
+        'unknown_meeting_count': 0,
+    }
+    for event in timed_events:
+        attendee_domains = []
+        for attendee in _meeting_attendees(event):
+            if attendee.get('is_current_user') is True:
+                continue
+            email = attendee.get('email', '')
+            if '@' in email:
+                attendee_domains.append(email.rsplit('@', 1)[1].lower())
+
+        if not attendee_domains:
+            meeting_split['unknown_meeting_count'] += 1
+        elif internal_domains and all(
+            domain in internal_domains for domain in attendee_domains
+        ):
+            meeting_split['internal_meeting_count'] += 1
+        else:
+            meeting_split['external_meeting_count'] += 1
+
+    total_meetings = calendar_analysis['total_meetings']
+    observations = []
+    if calendar_analysis['busiest_day']:
+        count = calendar_analysis['busiest_day_count']
+        meeting_label = 'timed meeting' if count == 1 else 'timed meetings'
+        observations.append(
+            f"{calendar_analysis['busiest_day']} is your busiest day, "
+            f"with {count} {meeting_label}."
+        )
+
+    one_on_ones = calendar_analysis['one_on_ones']
+    if one_on_ones:
+        meeting_label = 'timed meeting' if total_meetings == 1 else 'timed meetings'
+        verb = 'is' if one_on_ones == 1 else 'are'
+        observations.append(
+            f"{one_on_ones} of your {total_meetings} {meeting_label} "
+            f"{verb} {'a 1:1' if one_on_ones == 1 else '1:1s'}."
+        )
+    elif total_meetings:
+        meeting_label = 'timed meeting takes' if total_meetings == 1 else 'timed meetings take'
+        observations.append(
+            f"Your {total_meetings} {meeting_label} "
+            f"{calendar_analysis['meeting_hours']:g} hours this week."
+        )
+
+    return {
+        'recurring_commitments': recurring_commitments,
+        'internal_external_split': meeting_split,
+        'observations': observations[:2],
+    }
+
+
 def generate_weekly_plan(events: List[Dict], pillars: List[str], role: str) -> str:
     """Generate weekly plan markdown content from calendar events"""
-    from datetime import timedelta
-    today = datetime.now()
-    week_start = today - timedelta(days=today.weekday())
+    timed_events = _timed_calendar_events(events)
+    today = datetime.now().date()
+    week_start = first_working_day_of_week(today)
     week_end = week_start + timedelta(days=6)
     
     content = f"""# Week Priorities - {week_start.strftime('%b %d')} to {week_end.strftime('%b %d, %Y')}
@@ -588,22 +974,22 @@ Based on your calendar and pillars, here are suggested priorities:
         content += f"{i}. **{pillar}**: [Define specific outcome for this week]\n"
     
     content += "\n## Meeting Overview\n\n"
-    content += f"You have **{len(events)} meetings** scheduled this week.\n\n"
+    content += f"You have **{len(timed_events)} meetings** scheduled this week.\n\n"
     
     # Group by day
     days = {}
-    for event in events:
-        day = event['start'].strftime('%A')
+    for event in timed_events:
+        day = _calendar_event_datetime(event.get('start')).strftime('%A')
         if day not in days:
             days[day] = []
         days[day].append(event)
     
     content += "### Key Meetings\n\n"
-    for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']:
+    for day in working_day_names():
         if day in days:
             content += f"**{day}** ({len(days[day])} meetings)\n"
             for event in days[day][:3]:  # Show first 3
-                time = event['start'].strftime('%I:%M %p')
+                time = _calendar_event_datetime(event.get('start')).strftime('%I:%M %p')
                 content += f"- {time}: {event['title']}\n"
             if len(days[day]) > 3:
                 content += f"- ... and {len(days[day]) - 3} more\n"
@@ -622,25 +1008,14 @@ Based on your calendar and pillars, here are suggested priorities:
     
     return content
 
-def write_weekly_plan(content: str) -> bool:
-    """Write weekly plan to file"""
-    try:
-        week_priorities_dir = BASE_DIR / '02-Week_Priorities'
-        week_priorities_dir.mkdir(parents=True, exist_ok=True)
-        
-        week_file = week_priorities_dir / 'Week_Priorities.md'
-        week_file.write_text(content)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to write weekly plan: {e}")
-        return False
-
 def get_frequent_attendees(events: List[Dict], limit: int = 3) -> List[Dict]:
     """Get most frequent meeting attendees"""
     attendee_data = {}
     
-    for event in events:
-        for attendee in event.get('attendees', []):
+    for event in _timed_calendar_events(events):
+        for attendee in _meeting_attendees(event):
+            if attendee.get('is_current_user') is True:
+                continue
             email = attendee.get('email', '')
             name = attendee.get('name', email)
             if email and name:
@@ -656,52 +1031,6 @@ def get_frequent_attendees(events: List[Dict], limit: int = 3) -> List[Dict]:
     sorted_attendees = sorted(attendee_data.values(), key=lambda x: x['count'], reverse=True)
     return sorted_attendees[:limit]
 
-def create_person_page(contact: Dict, email_domain: str) -> bool:
-    """Create a person page, routing to Internal or External based on email domain"""
-    try:
-        email = contact['email']
-        name = contact['name']
-        
-        # Determine if internal or external
-        contact_domain = email.split('@')[1] if '@' in email else ''
-        is_internal = contact_domain in email_domain.split(',')
-        
-        # Create appropriate folder
-        folder = 'Internal' if is_internal else 'External'
-        from core.paths import PEOPLE_DIR
-        people_dir = PEOPLE_DIR / folder
-        people_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create person page
-        person_file_name = name.replace(' ', '_') + '.md'
-        person_file = people_dir / person_file_name
-        
-        # Don't overwrite existing
-        if person_file.exists():
-            return False
-        
-        content = f"""# {name}
-
-**Email:** {email}
-**Type:** {'Internal' if is_internal else 'External'}
-
-## Context
-
-*Automatically created during onboarding as a frequent meeting contact*
-
-## Meeting History
-
-## Action Items
-
-## Notes
-"""
-        
-        person_file.write_text(content)
-        return True
-    except Exception as e:
-        logger.error(f"Failed to create person page for {contact.get('name', 'unknown')}: {e}")
-        return False
-
 def get_recent_granola_meetings(days: int = 7) -> List[Dict]:
     """Get recent meetings from Granola"""
     try:
@@ -716,39 +1045,567 @@ def get_recent_granola_meetings(days: int = 7) -> List[Dict]:
         granola_module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(granola_module)
         
-        # Get recent meetings
-        from datetime import timedelta
-        cutoff = datetime.now() - timedelta(days=days)
-        meetings = granola_module.get_meetings_since(cutoff)
+        meetings = granola_module.get_recent_meetings(days_back=days)
         return meetings if meetings else []
     except Exception as e:
         logger.warning(f"Failed to get Granola meetings: {e}")
+        return []
+
+
+def get_recent_granola_meetings_for_entity_offer(
+    days: int = 28,
+    limit: int = 20,
+) -> List[Dict]:
+    """Fetch a bounded set of detailed Granola meetings for qualification."""
+    try:
+        granola_server_path = BASE_DIR / 'core' / 'mcp' / 'granola_server.py'
+        if not granola_server_path.exists():
+            return []
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "granola_server_entity_offer",
+            granola_server_path,
+        )
+        if spec is None or spec.loader is None:
+            return []
+        granola_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(granola_module)
+
+        meetings = granola_module.get_recent_meetings(
+            days_back=days,
+            limit=limit,
+        )
+        detailed = []
+        for meeting in meetings[:limit]:
+            meeting_id = meeting.get('id')
+            if not meeting_id:
+                continue
+            detail = granola_module.get_meeting_details(meeting_id)
+            if detail:
+                detailed.append(detail)
+        return detailed
+    except Exception as error:
+        logger.warning("Could not read Granola history for entity offer: %s", error)
         return []
 
 def count_unique_people(meetings: List[Dict]) -> int:
     """Count unique people across meetings"""
     people = set()
     for meeting in meetings:
-        for attendee in meeting.get('attendees', []):
+        for attendee in _meeting_attendees(meeting):
+            if attendee.get('is_current_user') is True:
+                continue
             email = attendee.get('email', '')
             if email:
-                people.add(email)
+                people.add(email.lower())
     return len(people)
 
 def count_external_companies(meetings: List[Dict], email_domain: str) -> int:
     """Count unique external companies based on email domains"""
-    internal_domains = set(d.strip() for d in email_domain.split(','))
+    internal_domains = {
+        domain.strip().lower()
+        for domain in email_domain.split(',')
+        if domain.strip()
+    }
     external_domains = set()
     
     for meeting in meetings:
-        for attendee in meeting.get('attendees', []):
+        for attendee in _meeting_attendees(meeting):
+            if attendee.get('is_current_user') is True:
+                continue
             email = attendee.get('email', '')
             if '@' in email:
-                domain = email.split('@')[1]
+                domain = email.rsplit('@', 1)[1].lower()
                 if domain not in internal_domains:
                     external_domains.add(domain)
     
     return len(external_domains)
+
+
+def _profile_email_domains(profile: Dict[str, Any]) -> set[str]:
+    configured = profile.get('email_domain') or ''
+    values = configured if isinstance(configured, list) else str(configured).split(',')
+    return {
+        str(value).strip().lower().lstrip('@')
+        for value in values
+        if str(value).strip()
+    }
+
+
+def _entity_offer_attendees(
+    meeting: Dict,
+    profile: Dict[str, Any],
+) -> List[Dict[str, str]]:
+    """Normalize attendees to the entity engine's name/email/location shape."""
+    internal_domains = _profile_email_domains(profile)
+    current_user_emails = {
+        str(value).strip().lower()
+        for value in (
+            profile.get('work_email'),
+            profile.get('calendar', {}).get('work_calendar')
+            if isinstance(profile.get('calendar'), dict)
+            else None,
+        )
+        if isinstance(value, str) and '@' in value
+    }
+    normalized = []
+    seen = set()
+    for attendee in _meeting_attendees(meeting):
+        email = str(attendee.get('email') or '').strip().lower()
+        name = str(attendee.get('name') or email).strip()
+        if not name or attendee.get('is_current_user') is True:
+            continue
+        if email and email in current_user_emails:
+            continue
+        identity = email or f"name:{name.casefold()}"
+        if identity in seen:
+            continue
+        seen.add(identity)
+
+        location = attendee.get('location')
+        if location not in {'internal', 'external', 'unknown'}:
+            domain = email.rsplit('@', 1)[1] if '@' in email else ''
+            location = (
+                'internal'
+                if domain and domain in internal_domains
+                else ('external' if domain else 'unknown')
+            )
+        normalized.append(
+            {
+                'name': name,
+                'email': email,
+                'location': location,
+            }
+        )
+    return normalized
+
+
+def _normalize_entity_offer_meeting(
+    meeting: Dict,
+    profile: Dict[str, Any],
+    *,
+    source: str,
+) -> Optional[Dict[str, Any]]:
+    created_at = (
+        meeting.get('createdAt')
+        or meeting.get('created_at')
+        or meeting.get('start')
+        or meeting.get('date')
+    )
+    event_datetime = _calendar_event_datetime(created_at)
+    if event_datetime is None and isinstance(created_at, str):
+        try:
+            event_datetime = datetime.fromisoformat(
+                created_at.replace('Z', '+00:00').replace(' +0000', '+00:00')
+            )
+        except ValueError:
+            return None
+    if event_datetime is None:
+        return None
+    if source == 'calendar':
+        comparable = event_datetime
+        now = datetime.now(tz=event_datetime.tzinfo)
+        if comparable > now:
+            return None
+
+    attendees = _entity_offer_attendees(meeting, profile)
+    if not attendees:
+        return None
+    meeting_id = (
+        meeting.get('id')
+        or meeting.get('provider_event_id')
+        or meeting.get('source_event_id')
+    )
+    if not meeting_id:
+        identity = json.dumps(
+            {
+                'source': source,
+                'created_at': event_datetime.isoformat(),
+                'title': meeting.get('title', ''),
+                'attendees': attendees,
+            },
+            sort_keys=True,
+        )
+        meeting_id = hashlib.sha1(identity.encode('utf-8')).hexdigest()
+    return {
+        'id': str(meeting_id),
+        'createdAt': event_datetime.isoformat(),
+        'hasTranscript': bool(
+            meeting.get('hasTranscript')
+            or meeting.get('has_transcript')
+            or str(meeting.get('transcript') or '').strip()
+        ),
+        'filteredAttendees': attendees,
+        '_source': source,
+    }
+
+
+def _entity_offer_dedupe_key(meeting: Dict[str, Any]) -> tuple[str, tuple[str, ...]]:
+    date_key = str(meeting['createdAt'])[:10]
+    attendee_keys = tuple(sorted(
+        attendee.get('email') or f"name:{attendee['name'].casefold()}"
+        for attendee in meeting['filteredAttendees']
+    ))
+    return date_key, attendee_keys
+
+
+def _collect_entity_offer_meetings() -> List[Dict[str, Any]]:
+    """Collect bounded history, preferring transcript-backed Granola duplicates."""
+    profile = _load_first_week_profile()
+    normalized: Dict[tuple[str, tuple[str, ...]], Dict[str, Any]] = {}
+    sources = (
+        ('calendar', get_calendar_events_for_entity_offer(days_back=28)),
+        ('granola', get_recent_granola_meetings_for_entity_offer(days=28, limit=20)),
+    )
+    for source, meetings in sources:
+        for meeting in meetings:
+            candidate = _normalize_entity_offer_meeting(
+                meeting,
+                profile,
+                source=source,
+            )
+            if candidate is None:
+                continue
+            key = _entity_offer_dedupe_key(candidate)
+            existing = normalized.get(key)
+            if existing is None:
+                normalized[key] = candidate
+                continue
+            existing['hasTranscript'] = (
+                existing['hasTranscript'] or candidate['hasTranscript']
+            )
+            if source == 'granola':
+                candidate['hasTranscript'] = existing['hasTranscript']
+                normalized[key] = candidate
+
+    return [
+        {
+            key: value
+            for key, value in meeting.items()
+            if not key.startswith('_')
+        }
+        for meeting in sorted(
+            normalized.values(),
+            key=lambda item: (item['createdAt'], item['id']),
+        )
+    ]
+
+
+def _require_finalized_onboarding() -> None:
+    if not MARKER_FILE.exists():
+        raise RuntimeError(
+            "Entity page offers are available only after finalize_onboarding succeeds."
+        )
+
+
+def _run_entity_offer_bridge(command: str, **payload: Any) -> Dict[str, Any]:
+    """Call the shipped local entity engine without relying on work-mcp."""
+    bridge = Path(__file__).parent / 'scripts' / 'onboarding_entity_offer.cjs'
+    repo_root = Path(__file__).parent.parent.parent
+    node = os.environ.get('DEX_PROVISION_NODE', 'node')
+    completed = subprocess.run(
+        [node, str(bridge)],
+        input=json.dumps({'command': command, **payload}, cls=DateTimeEncoder),
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+        env={
+            **os.environ,
+            'VAULT_PATH': str(BASE_DIR),
+            'CLAUDE_PROJECT_DIR': str(BASE_DIR),
+            'DEX_PYTHON': os.environ.get('DEX_PYTHON', sys.executable),
+            'PYTHONPATH': os.pathsep.join(
+                path
+                for path in (
+                    str(repo_root),
+                    os.environ.get('PYTHONPATH', ''),
+                )
+                if path
+            ),
+        },
+    )
+    try:
+        result = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("Entity offer bridge returned an invalid response") from error
+    if completed.returncode != 0 or result.get('ok') is not True:
+        error = result.get('error', {})
+        result_errors = [
+            item.get('error', {}).get('message')
+            for item in result.get('results', [])
+            if isinstance(item, dict) and isinstance(item.get('error'), dict)
+        ]
+        raise RuntimeError(
+            error.get('message')
+            or next((message for message in result_errors if message), None)
+            or completed.stderr.strip()
+            or "Entity offer bridge failed"
+        )
+    return result
+
+
+def prepare_entity_page_offer() -> Dict[str, Any]:
+    """Stage only engine-qualified suggestions after onboarding finalization."""
+    _require_finalized_onboarding()
+    profile = _load_first_week_profile()
+    result = _run_entity_offer_bridge(
+        'prepare',
+        meetings=_collect_entity_offer_meetings(),
+        profile=profile,
+    )
+    suggestions = result.get('suggestions', [])
+    return {
+        'available': True,
+        'offered': bool(suggestions),
+        'suggestions': suggestions,
+    }
+
+
+def respond_to_entity_page_offer(
+    action: str,
+    suggestion_ids: List[str],
+) -> Dict[str, Any]:
+    """Accept, dismiss, or permanently suppress the concrete onboarding offer."""
+    _require_finalized_onboarding()
+    result = _run_entity_offer_bridge(
+        'respond',
+        action=action,
+        suggestion_ids=suggestion_ids,
+    )
+    return {
+        'action': result['action'],
+        'results': result['results'],
+    }
+
+
+def _render_entity_creation_mode(original: str, mode: str) -> str:
+    """Surgically set entity_creation.mode while preserving unrelated YAML."""
+    import copy
+
+    import yaml
+
+    if mode not in {'auto', 'suggest'}:
+        raise ValueError("entity creation mode must be auto or suggest")
+    try:
+        before = yaml.safe_load(original) or {}
+    except yaml.YAMLError as error:
+        raise RuntimeError("User profile contains invalid YAML") from error
+    if not isinstance(before, dict):
+        raise RuntimeError("User profile must contain an object")
+
+    expected = copy.deepcopy(before)
+    current_block = expected.get('entity_creation')
+    if current_block is not None and not isinstance(current_block, dict):
+        raise RuntimeError("User profile entity_creation must contain an object")
+    expected.setdefault('entity_creation', {})['mode'] = mode
+
+    lines = original.splitlines(keepends=True)
+    newline = '\r\n' if any(line.endswith('\r\n') for line in lines) else '\n'
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.rstrip('\r\n').startswith('entity_creation:')
+            and not line.startswith((' ', '\t'))
+        ),
+        None,
+    )
+    rendered_line = f"  mode: {mode}{newline}"
+    if start is None:
+        prefix = '' if not original or original.endswith(('\n', '\r')) else newline
+        rendered = f"{original}{prefix}entity_creation:{newline}{rendered_line}"
+    else:
+        end = len(lines)
+        for index in range(start + 1, len(lines)):
+            stripped = lines[index].rstrip('\r\n')
+            if stripped and not stripped.startswith((' ', '\t', '#')):
+                end = index
+                break
+        mode_index = next(
+            (
+                index
+                for index in range(start + 1, end)
+                if lines[index].lstrip().startswith('mode:')
+            ),
+            None,
+        )
+        if mode_index is None:
+            lines.insert(start + 1, rendered_line)
+        else:
+            lines[mode_index] = rendered_line
+        rendered = ''.join(lines)
+
+    try:
+        after = yaml.safe_load(rendered) or {}
+    except yaml.YAMLError as error:  # pragma: no cover - validation invariant
+        raise RuntimeError("Entity creation setting produced invalid YAML") from error
+    if after != expected:
+        raise RuntimeError("Entity creation setting changed unrelated profile state")
+    return rendered
+
+
+def set_entity_creation_default(automatic: bool) -> Dict[str, Any]:
+    """Persist the user's explicit default through the lifecycle transaction door."""
+    _require_finalized_onboarding()
+    if not isinstance(automatic, bool):
+        raise ValueError("automatic must be true or false")
+
+    from core.lifecycle import service as lifecycle_service
+    from core.transaction.engine import PlanEntry
+
+    profile_path = BASE_DIR / 'System' / 'user-profile.yaml'
+    if profile_path.is_symlink() or not profile_path.is_file():
+        raise RuntimeError("User profile is missing or unsafe")
+    original_bytes = profile_path.read_bytes()
+    mode = 'auto' if automatic else 'suggest'
+    rendered = _render_entity_creation_mode(
+        original_bytes.decode('utf-8'),
+        mode,
+    ).encode('utf-8')
+    if rendered == original_bytes:
+        return {
+            'mode': mode,
+            'changed': False,
+            'lifecycle_receipt': {
+                'purpose': 'entity-creation-mode',
+                'files_written': [],
+            },
+        }
+
+    plan = [
+        PlanEntry(
+            'System/user-profile.yaml',
+            rendered,
+            mode=profile_path.stat().st_mode & 0o777,
+            expected_current_sha256=hashlib.sha256(original_bytes).hexdigest(),
+        )
+    ]
+    preview = lifecycle_service._preview_transaction(
+        BASE_DIR,
+        plan,
+        purpose='entity-creation-mode',
+        operation='capability-state',
+    )
+    executed = lifecycle_service._execute_approved_transaction(
+        BASE_DIR,
+        plan,
+        purpose='entity-creation-mode',
+        operation='capability-state',
+        approved_token=str(preview['approval_token']),
+    )
+    return {
+        'mode': mode,
+        'changed': True,
+        'lifecycle_receipt': executed['receipt'],
+    }
+
+
+def run_first_week_analysis() -> Dict[str, Any]:
+    """Build the honest, structured first-week reveal used after finalization."""
+    try:
+        events = get_calendar_events_for_week()
+    except Exception as e:
+        return {
+            "available": False,
+            "reason": str(e) or "Calendar data could not be read.",
+        }
+
+    timed_events = _timed_calendar_events(events)
+    calendar_analysis = analyze_calendar_events(timed_events)
+    top_contacts = get_frequent_attendees(timed_events)
+    recent_meetings = get_recent_granola_meetings(days=7)
+    combined_meetings = [*timed_events, *recent_meetings]
+
+    profile = _load_first_week_profile()
+    pillars = [
+        pillar.get('name', '') if isinstance(pillar, dict) else str(pillar)
+        for pillar in profile.get('pillars', [])
+    ]
+    pillars = [pillar for pillar in pillars if pillar]
+
+    return {
+        "available": True,
+        "meeting_count": calendar_analysis['total_meetings'],
+        "meeting_hours": calendar_analysis['meeting_hours'],
+        "one_on_one_count": calendar_analysis['one_on_ones'],
+        "busiest_day": {
+            "day": calendar_analysis['busiest_day'],
+            "count": calendar_analysis['busiest_day_count'],
+        },
+        "top_contacts": [
+            {
+                "name": contact['name'],
+                "email": contact['email'],
+                "meeting_count": contact['count'],
+            }
+            for contact in top_contacts
+        ],
+        "unique_people_count": count_unique_people(combined_meetings),
+        "external_company_count": count_external_companies(
+            combined_meetings,
+            profile.get('email_domain', ''),
+        ),
+        "recent_meeting_count": len(recent_meetings),
+        "pillar_evidence": build_pillar_evidence(
+            timed_events,
+            profile.get('email_domain', ''),
+        ),
+        "draft_weekly_plan": generate_weekly_plan(
+            timed_events,
+            pillars,
+            profile.get('role', ''),
+        ),
+    }
+
+
+def generate_nudge_calendar() -> Dict[str, Any]:
+    """Write the optional onboarding nudge calendar and return concrete metadata."""
+
+    def _granola_connected() -> bool:
+        # Granola only changes the wording of one event. If its module cannot be
+        # imported or the lookup fails, fall back to the not-connected variant
+        # rather than failing the whole calendar for an optional flourish.
+        try:
+            from core.mcp.granola_server import get_api_key
+
+            return get_api_key() is not None
+        except Exception as error:
+            logger.warning(f"Could not check the Granola connection: {error}")
+            return False
+
+    profile = _load_first_week_profile()
+    pillars = [
+        pillar.get('name', '') if isinstance(pillar, dict) else str(pillar)
+        for pillar in profile.get('pillars', [])
+    ]
+    pillars = [pillar.strip() for pillar in pillars if pillar.strip()]
+    calendar_text = build_nudge_calendar(
+        date.today(),
+        pillars=pillars,
+        granola_connected=_granola_connected(),
+    )
+
+    calendar_path = (BASE_DIR / "System" / "dex-calendar.ics").resolve()
+    calendar_path.parent.mkdir(parents=True, exist_ok=True)
+    calendar_path.write_text(calendar_text, encoding="utf-8", newline="")
+
+    first_date_value = next(
+        line.partition(":")[2]
+        for line in calendar_text.splitlines()
+        if line.startswith("DTSTART;VALUE=DATE:")
+    )
+    return {
+        "path": str(calendar_path),
+        "event_count": calendar_text.count("BEGIN:VEVENT"),
+        "first_event_date": datetime.strptime(
+            first_date_value,
+            "%Y%m%d",
+        ).date().isoformat(),
+    }
+
 
 # ============================================================================
 # MCP SERVER SETUP
@@ -789,9 +1646,9 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "step_number": {
                         "type": "integer",
-                        "description": "Step number (1-6)",
+                        "description": f"Step number (1-{ONBOARDING_STEPS})",
                         "minimum": 1,
-                        "maximum": 6
+                        "maximum": ONBOARDING_STEPS
                     },
                     "step_data": {
                         "type": "object",
@@ -800,6 +1657,78 @@ async def handle_list_tools() -> list[types.Tool]:
                 },
                 "required": ["step_number", "step_data"]
             }
+        ),
+        types.Tool(
+            name="save_calendar_selection",
+            description=(
+                "Validate a proposed Apple Calendar selection for later explicit "
+                "profile approval, or choose no calendar."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "work_calendar": {
+                        "type": "string",
+                        "description": "Exact work calendar name returned by Calendar.app",
+                        "default": ""
+                    },
+                    "work_email": {
+                        "type": "string",
+                        "description": (
+                            "Transient identity hint when the calendar name is an "
+                            "email address; never stored in the onboarding session"
+                        ),
+                        "default": ""
+                    },
+                    "calendar_count": {
+                        "type": "integer",
+                        "description": "Number of calendars returned by Calendar.app",
+                        "minimum": 0,
+                        "default": 0
+                    },
+                    "skipped": {
+                        "type": "boolean",
+                        "description": "Defer calendar setup until permissions can be checked later",
+                        "default": False
+                    }
+                }
+            }
+        ),
+        types.Tool(
+            name="preview_confirmed_onboarding_context",
+            description=(
+                "Preview the reviewed working context and Apple Calendar source after "
+                "onboarding is complete. This does not write anything."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "working_context": {
+                        "type": "object",
+                        "description": "The user's reviewed working summary, not source document text.",
+                    },
+                    "calendar_source": {
+                        "type": "object",
+                        "description": "Apple Calendar selection or provider=none; Google is not supported here.",
+                    },
+                },
+                "required": ["working_context", "calendar_source"],
+            },
+        ),
+        types.Tool(
+            name="apply_confirmed_onboarding_context",
+            description=(
+                "Apply only an unchanged onboarding-context preview after explicit approval. "
+                "Returns the lifecycle transaction receipt."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "preview": {"type": "object"},
+                    "approval_token": {"type": "string"},
+                },
+                "required": ["preview", "approval_token"],
+            },
         ),
         types.Tool(
             name="get_onboarding_status",
@@ -815,6 +1744,63 @@ async def handle_list_tools() -> list[types.Tool]:
             inputSchema={
                 "type": "object",
                 "properties": {}
+            }
+        ),
+        types.Tool(
+            name="run_first_week_analysis",
+            description="Analyze this week's timed calendar meetings and return an honest, structured onboarding reveal.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        types.Tool(
+            name="generate_nudge_calendar",
+            description="Create the optional first-weeks Dex nudge calendar and return its file path and event details.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        types.Tool(
+            name="prepare_entity_page_offer",
+            description="After finalization, stage only entity-engine-qualified person/company suggestions for the concrete onboarding offer.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
+            }
+        ),
+        types.Tool(
+            name="respond_to_entity_page_offer",
+            description="Apply the user's yes, no, or never answer to the exact onboarding entity suggestions.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["yes", "no", "never"],
+                    },
+                    "suggestion_ids": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "minItems": 1,
+                        "maxItems": 5,
+                    },
+                },
+                "required": ["action", "suggestion_ids"],
+            }
+        ),
+        types.Tool(
+            name="set_entity_creation_default",
+            description="Persist the user's explicit choice for automatic versus suggest-first future entity creation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "automatic": {
+                        "type": "boolean",
+                    },
+                },
+                "required": ["automatic"],
             }
         ),
         types.Tool(
@@ -859,7 +1845,63 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
     arguments = arguments or {}
     
     try:
-        if name == "start_onboarding_session":
+        if name == "preview_confirmed_onboarding_context":
+            if not MARKER_FILE.exists():
+                result = create_error_response(
+                    "Finish onboarding before saving working context or a calendar source",
+                    suggestion="Call finalize_onboarding first",
+                )
+            else:
+                working_context = arguments.get("working_context")
+                calendar_source = arguments.get("calendar_source")
+                if not isinstance(working_context, dict) or not isinstance(calendar_source, dict):
+                    result = create_error_response(
+                        "working_context and calendar_source must both be objects",
+                    )
+                else:
+                    try:
+                        previewed = lifecycle_service.build_and_preview_onboarding_context(
+                            BASE_DIR,
+                            working_context,
+                            calendar_source,
+                        )
+                    except PlanRejected as error:
+                        result = create_error_response(str(error))
+                    else:
+                        result = create_success_response(
+                            previewed,
+                            "Review this exact context and calendar source, then approve it to save.",
+                        )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "apply_confirmed_onboarding_context":
+            if not MARKER_FILE.exists():
+                result = create_error_response(
+                    "Finish onboarding before saving working context or a calendar source",
+                    suggestion="Call finalize_onboarding first",
+                )
+            else:
+                preview = arguments.get("preview")
+                approval_token = arguments.get("approval_token")
+                if not isinstance(preview, dict) or not isinstance(approval_token, str):
+                    result = create_error_response("preview and approval_token are required")
+                else:
+                    try:
+                        executed = lifecycle_service.execute_approved_onboarding_context(
+                            BASE_DIR,
+                            preview,
+                            approval_token,
+                        )
+                    except PlanRejected as error:
+                        result = create_error_response(str(error))
+                    else:
+                        result = create_success_response(
+                            executed,
+                            "Working context and calendar source saved with a lifecycle receipt.",
+                        )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "start_onboarding_session":
             force_new = arguments.get('force_new', False)
             
             session = load_session()
@@ -867,7 +1909,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             if session and not force_new:
                 result = create_success_response(
                     session,
-                    f"Resuming onboarding session. Completed steps: {len(session['completed_steps'])}/6"
+                    f"Resuming onboarding session. Completed steps: {len(session['completed_steps'])}/{ONBOARDING_STEPS}"
                 )
             else:
                 if session and force_new:
@@ -887,12 +1929,37 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             step_data = arguments.get('step_data', {})
             
             if not step_number or not isinstance(step_number, int):
-                result = create_error_response("Invalid step_number", suggestion="Provide step_number as integer 1-6")
+                result = create_error_response(
+                    "Invalid step_number",
+                    suggestion=f"Provide step_number as integer 1-{ONBOARDING_STEPS}",
+                )
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
             
             session = load_session()
             if not session:
                 result = create_error_response("No active session", suggestion="Call start_onboarding_session first")
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            if step_number < 1 or step_number > ONBOARDING_STEPS:
+                result = create_error_response(
+                    f"Invalid step number: {step_number}",
+                    suggestion=f"Step must be 1-{ONBOARDING_STEPS}",
+                )
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            if step_number == 1 and not _calendar_addressed(session):
+                result = create_error_response(CALENDAR_REQUIRED_ERROR)
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            next_required_step = _next_required_step_before(
+                step_number,
+                session["completed_steps"],
+            )
+            if next_required_step is not None:
+                result = create_error_response(
+                    f"Complete step {next_required_step} "
+                    f"({STEP_NAMES[next_required_step]}) first — steps run in order."
+                )
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
             
             # Step 1: Name
@@ -966,23 +2033,31 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             # Step 4: Email Domain (CRITICAL)
             elif step_number == 4:
                 email_domain = step_data.get('email_domain', '').strip()
-                
-                valid, error_msg = validate_email_domain(email_domain)
+                no_company_domain = step_data.get('no_company_domain') is True
+
+                if not email_domain and no_company_domain:
+                    valid, error_msg, normalized_domain = True, None, ""
+                else:
+                    valid, error_msg, normalized_domain = validate_email_domain(email_domain)
+
                 if not valid:
                     result = create_error_response(
                         error_msg,
                         step=4,
                         field="email_domain",
-                        suggestion="Provide domain without @ (e.g., 'pendo.io' or 'acme.com')"
+                        suggestion=(
+                            "Provide a domain (e.g., 'pendo.io' or 'acme.com'). "
+                            "If you do not have a company domain, set no_company_domain to true."
+                        )
                     )
                 else:
-                    session['data']['email_domain'] = email_domain
+                    session['data']['email_domain'] = normalized_domain
                     if step_number not in session['completed_steps']:
                         session['completed_steps'].append(step_number)
                     session['current_step'] = 5
                     save_session(session)
                     result = create_success_response(
-                        {"step": 4, "completed": True, "email_domain": email_domain},
+                        {"step": 4, "completed": True, "email_domain": normalized_domain},
                         "Step 4 complete - email domain validated"
                     )
             
@@ -1076,11 +2151,169 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 session['current_step'] = 7
                 save_session(session)
                 result = create_success_response({"step": 6, "completed": True}, "Step 6 complete")
+
+            # Step 7: Working week
+            elif step_number == 7:
+                working_week = step_data.get('working_week', {})
+                supplied_days = (
+                    working_week.get('days', [])
+                    if isinstance(working_week, dict)
+                    else []
+                )
+                days = normalize_working_days(supplied_days)
+                if not days:
+                    result = create_error_response(
+                        "Working week needs at least one valid day",
+                        step=7,
+                        field="working_week.days",
+                        suggestion="Choose at least one day you normally work",
+                    )
+                else:
+                    normalized_working_week = {'days': days}
+                    session['data']['working_week'] = normalized_working_week
+                    if step_number not in session['completed_steps']:
+                        session['completed_steps'].append(step_number)
+                    session['current_step'] = 8
+                    save_session(session)
+                    result = create_success_response(
+                        {
+                            "step": 7,
+                            "completed": True,
+                            "working_week": normalized_working_week,
+                        },
+                        "Step 7 complete",
+                    )
+
+            # Step 8: Optional capability rooms (contract-declared defaults)
+            elif step_number == 8:
+                supplied = step_data.get('capabilities', {})
+                if not isinstance(supplied, dict):
+                    result = create_error_response(
+                        "Capabilities must be an object",
+                        step=8,
+                        field="capabilities",
+                        suggestion="Answer yes or no for each optional room",
+                    )
+                else:
+                    selected = {}
+                    invalid_field = None
+                    declared_rooms = set(capability_rooms.room_ids())
+                    unknown_rooms = sorted(set(supplied) - declared_rooms)
+                    if unknown_rooms:
+                        invalid_field = f"capabilities.{unknown_rooms[0]}"
+                    for room in capability_rooms.room_ids():
+                        if invalid_field:
+                            break
+                        if room in supplied and not isinstance(supplied[room], bool):
+                            invalid_field = f"capabilities.{room}"
+                            break
+                    selected = _capability_states(supplied)
+                    if invalid_field:
+                        result = create_error_response(
+                            f"{invalid_field} must be true or false",
+                            step=8,
+                            field=invalid_field,
+                            suggestion="Answer yes or no for this room",
+                        )
+                    else:
+                        session['data']['capabilities'] = selected
+                        if step_number not in session['completed_steps']:
+                            session['completed_steps'].append(step_number)
+                        session['current_step'] = 9
+                        save_session(session)
+                        result = create_success_response(
+                            {"step": 8, "completed": True, "capabilities": selected},
+                            "Step 8 complete",
+                        )
             
             else:
-                result = create_error_response(f"Invalid step number: {step_number}", suggestion="Step must be 1-6")
+                result = create_error_response(
+                    f"Invalid step number: {step_number}",
+                    suggestion=f"Step must be 1-{ONBOARDING_STEPS}",
+                )
             
             return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
+
+        elif name == "save_calendar_selection":
+            skipped = arguments.get('skipped', False)
+            work_calendar = (arguments.get('work_calendar') or '').strip()
+            work_email = (arguments.get('work_email') or '').strip()
+
+            session = load_session()
+            if not session:
+                result = create_error_response(
+                    "No active session",
+                    suggestion="Call start_onboarding_session first"
+                )
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            if skipped:
+                session["calendar_addressed"] = True
+                for field in ("calendar", "calendar_source", "work_email"):
+                    session["data"].pop(field, None)
+                save_session(session)
+                result = create_success_response(
+                    {
+                        "calendar_source": {"provider": "none"},
+                        "working_week_suggestion": default_working_week_suggestion(),
+                    },
+                    "Calendar setup skipped for now. /dex-doctor will pick this up later."
+                )
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            if not work_calendar:
+                result = create_error_response(
+                    "work_calendar is required unless calendar setup is skipped",
+                    field="work_calendar",
+                    suggestion="Choose a calendar name or set skipped=true"
+                )
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+            verification_note = ""
+            try:
+                from core.mcp.calendar_server import _get_calendar_list_result
+
+                calendar_list = _get_calendar_list_result()
+                if calendar_list.get("success"):
+                    available_calendars = calendar_list["calendars"]
+                    if work_calendar not in available_calendars:
+                        result = create_error_response(
+                            f"Calendar '{work_calendar}' was not found. Available calendars: "
+                            f"{', '.join(available_calendars)}",
+                            field="work_calendar",
+                            suggestion="Choose one of the available calendar names"
+                        )
+                        return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+                else:
+                    verification_note = (
+                        " Couldn't verify against your live calendars — "
+                        "/dex-doctor will confirm later."
+                    )
+            except Exception:
+                verification_note = (
+                    " Couldn't verify against your live calendars — "
+                    "/dex-doctor will confirm later."
+                )
+
+            calendar_source = {
+                "provider": "apple",
+                "work_calendar": work_calendar,
+            }
+            session["calendar_addressed"] = True
+            for field in ("calendar", "calendar_source", "work_email"):
+                session["data"].pop(field, None)
+            save_session(session)
+
+            result = create_success_response(
+                {
+                    "work_email": work_email,
+                    "calendar_source": calendar_source,
+                    "derived_identity": derive_identity_from_email(work_email),
+                    "working_week_suggestion": default_working_week_suggestion(),
+                },
+                f"Work calendar validated for later approval.{verification_note}"
+            )
+            return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
         
         elif name == "get_onboarding_status":
             session = load_session()
@@ -1089,9 +2322,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 result = create_error_response("No active session", suggestion="Call start_onboarding_session first")
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
             
-            required_steps = [1, 2, 3, 4, 5, 6]
             completed = session['completed_steps']
-            missing = [s for s in required_steps if s not in completed]
+            missing = [s for s in REQUIRED_ONBOARDING_STEPS if s not in completed]
             
             step_names = {
                 1: "Name",
@@ -1099,10 +2331,18 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 3: "Company Size",
                 4: "Email Domain (CRITICAL)",
                 5: "Strategic Pillars",
-                6: "Communication Preferences"
+                6: "Communication Preferences",
+                7: "Working Week",
+                8: "Optional Rooms",
             }
             
-            progress = len(completed) / len(required_steps) * 100
+            completed_required = [
+                s for s in completed if s in REQUIRED_ONBOARDING_STEPS
+            ]
+            progress = (
+                len(completed_required) / len(REQUIRED_ONBOARDING_STEPS) * 100
+            )
+            calendar_addressed = _calendar_addressed(session)
             
             status = {
                 "completed_steps": completed,
@@ -1110,7 +2350,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 "missing_step_names": [step_names[s] for s in missing],
                 "current_step": session['current_step'],
                 "progress_percent": round(progress, 1),
-                "ready_to_finalize": len(missing) == 0,
+                "calendar_addressed": calendar_addressed,
+                "ready_to_finalize": len(missing) == 0 and calendar_addressed,
                 "session_data": session['data']
             }
             
@@ -1142,6 +2383,51 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             })
             
             return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
+        elif name == "run_first_week_analysis":
+            result = create_success_response(run_first_week_analysis())
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, cls=DateTimeEncoder),
+            )]
+
+        elif name == "generate_nudge_calendar":
+            result = create_success_response(
+                generate_nudge_calendar(),
+                "Nudge calendar ready",
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, cls=DateTimeEncoder),
+            )]
+
+        elif name == "prepare_entity_page_offer":
+            result = create_success_response(prepare_entity_page_offer())
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, cls=DateTimeEncoder),
+            )]
+
+        elif name == "respond_to_entity_page_offer":
+            result = create_success_response(
+                respond_to_entity_page_offer(
+                    arguments.get('action', ''),
+                    arguments.get('suggestion_ids', []),
+                )
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, cls=DateTimeEncoder),
+            )]
+
+        elif name == "set_entity_creation_default":
+            result = create_success_response(
+                set_entity_creation_default(arguments.get('automatic'))
+            )
+            return [types.TextContent(
+                type="text",
+                text=json.dumps(result, indent=2, cls=DateTimeEncoder),
+            )]
         
         elif name == "finalize_onboarding":
             dry_run = arguments.get('dry_run', False)
@@ -1151,13 +2437,22 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 result = create_error_response("No active session", suggestion="Call start_onboarding_session first")
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
+            if not _calendar_addressed(session):
+                result = create_error_response(CALENDAR_REQUIRED_ERROR)
+                return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
+
             # Verify all required steps completed
-            required_steps = [1, 2, 3, 4, 5, 6]
+            # Step 8 is skippable: omitted answers resolve from the portable
+            # contract defaults and are persisted explicitly at finalization.
             completed = session['completed_steps']
-            missing = [s for s in required_steps if s not in completed]
+            missing = [s for s in REQUIRED_ONBOARDING_STEPS if s not in completed]
 
             if missing:
-                step_names = {1: "Name", 2: "Role", 3: "Company Size", 4: "Email Domain", 5: "Pillars", 6: "Communication"}
+                step_names = {
+                    1: "Name", 2: "Role", 3: "Company Size",
+                    4: "Email Domain", 5: "Pillars", 6: "Communication",
+                    7: "Working Week", 8: "Optional Rooms",
+                }
                 result = create_error_response(
                     f"Cannot finalize: missing steps {missing}",
                     suggestion=f"Complete these steps first: {', '.join(step_names[s] for s in missing)}"
@@ -1165,7 +2460,7 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2))]
 
             # Critical check for Step 4
-            if 4 not in completed or not session['data'].get('email_domain'):
+            if 4 not in completed:
                 result = create_error_response(
                     "Cannot finalize: email_domain is required",
                     step=4,
@@ -1178,43 +2473,13 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             if dry_run:
                 logger.info("Finalize (DRY RUN) - previewing what would be created")
 
-                # Compute folders that would be created
-                para_folders = [
-                    "04-Projects", "05-Areas/People/Internal", "05-Areas/People/External",
-                    "05-Areas/Companies", "00-Inbox/Meetings", "00-Inbox/Ideas",
-                    "06-Resources/Learnings", "06-Resources/Quarterly_Reviews",
-                    "07-Archives/04-Projects", "07-Archives/Plans", "07-Archives/Reviews",
-                    "System/Templates", "01-Quarter_Goals", "03-Tasks", "02-Week_Priorities"
-                ]
-                would_create_folders = [f for f in para_folders if not (BASE_DIR / f).exists()]
-                already_exist_folders = [f for f in para_folders if (BASE_DIR / f).exists()]
-
-                # Compute files that would be created
-                would_create_files = []
-                already_exist_files = []
-
-                tasks_file = BASE_DIR / '03-Tasks' / 'Tasks.md'
-                if not tasks_file.exists():
-                    would_create_files.append('03-Tasks/Tasks.md')
-                else:
-                    already_exist_files.append('03-Tasks/Tasks.md')
-
-                priorities_file = BASE_DIR / '02-Week_Priorities' / 'Week_Priorities.md'
-                if not priorities_file.exists():
-                    would_create_files.append('02-Week_Priorities/Week_Priorities.md')
-                else:
-                    already_exist_files.append('02-Week_Priorities/Week_Priorities.md')
-
-                would_create_files.append('System/user-profile.yaml')
-                would_create_files.append('System/pillars.yaml')
-
-                # Configs that would be updated
-                would_update_configs = ['CLAUDE.md (User Profile section)']
-                if MCP_CONFIG_EXAMPLE.exists():
-                    would_update_configs.append('System/.mcp.json')
+                selected_capabilities = _capability_states(
+                    session['data'].get('capabilities')
+                )
+                provision_preview = _preview_through_provisioner(session)
 
                 # Build preview of user-profile.yaml content
-                data = session['data']
+                data = _approved_profile_session_data(session)
                 profile_preview = {
                     'name': data.get('name', ''),
                     'role': data.get('role', ''),
@@ -1223,9 +2488,18 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                     'company_size': data.get('company_size', ''),
                     'email_domain': data.get('email_domain', ''),
                     'obsidian_mode': data.get('obsidian_mode', False),
-                    'communication': data.get('communication', {})
+                    # 'suggest', not 'auto': onboarding now asks whether page
+                    # creation should be automatic and writes the answer, so a
+                    # completed setup never leaves someone on a default they
+                    # were never told about.
+                    'entity_creation': {'mode': 'suggest'},
+                    'working_week': data.get('working_week', {}),
+                    'communication': data.get('communication', {}),
+                    'capabilities': {
+                        room: {'enabled': selected_capabilities[room]}
+                        for room in capability_rooms.room_ids()
+                    },
                 }
-
                 # Build preview of pillars.yaml content
                 pillars_preview = []
                 for pillar in data.get('pillars', []):
@@ -1234,7 +2508,11 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
 
                 # Completion marker preview
                 marker_preview = {
+                    'completed': True,
                     'completed_at': '(timestamp)',
+                    'provisioned_by': 'core/provision.cjs',
+                    'adopted': False,
+                    'version': _onboarding_package_version(),
                     'user_name': data.get('name', ''),
                     'role': data.get('role', ''),
                     'email_domain': data.get('email_domain', ''),
@@ -1246,13 +2524,8 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
                 dry_run_summary = {
                     'dry_run': True,
                     'validation_passed': True,
-                    'would_create_folders': would_create_folders,
-                    'already_exist_folders': already_exist_folders,
-                    'would_create_files': would_create_files,
-                    'already_exist_files': already_exist_files,
-                    'would_update_configs': would_update_configs,
+                    **provision_preview,
                     'would_create_marker': marker_preview,
-                    'would_delete_session': True,
                     'preview_user_profile': profile_preview,
                     'preview_pillars': pillars_preview,
                     'session_data_snapshot': data
@@ -1260,7 +2533,10 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
 
                 result = create_success_response(
                     dry_run_summary,
-                    f"DRY RUN: Would create {len(would_create_folders)} folders, {len(would_create_files)} files, update {len(would_update_configs)} configs. No changes made."
+                    "DRY RUN: Would create "
+                    f"{len(provision_preview['would_create_folders'])} folders, "
+                    f"{len(provision_preview['would_create_files'])} files, update "
+                    f"{len(provision_preview['would_update_configs'])} configs. No changes made."
                 )
                 return [types.TextContent(type="text", text=json.dumps(result, indent=2, cls=DateTimeEncoder))]
 
@@ -1274,67 +2550,17 @@ async def handle_call_tool(name: str, arguments: dict | None) -> list[types.Text
             }
 
             try:
-                # 1. Create PARA structure
-                logger.info("Creating PARA folder structure")
-                folders = create_para_structure(BASE_DIR)
-                summary['folders_created'] = folders
-
-                # 2. Create initial files
-                logger.info("Creating initial files")
-                files = create_initial_files(BASE_DIR, session)
-                summary['files_created'].extend(files)
-
-                # 3. Create user-profile.yaml
-                logger.info("Creating user-profile.yaml")
-                if yaml and create_user_profile(session):
-                    summary['files_created'].append('System/user-profile.yaml')
-                else:
-                    summary['errors'].append("Could not create user-profile.yaml")
-
-                # 4. Create pillars.yaml
-                logger.info("Creating pillars.yaml")
-                if yaml and create_pillars_file(session['data']['pillars']):
-                    summary['files_created'].append('System/pillars.yaml')
-                else:
-                    summary['errors'].append("Could not create pillars.yaml")
-
-                # 5. Update CLAUDE.md
-                logger.info("Updating CLAUDE.md")
-                if update_claude_md(session):
-                    summary['configs_updated'].append('CLAUDE.md')
-                else:
-                    summary['errors'].append("Could not update CLAUDE.md")
-
-                # 6. Setup MCP config
-                logger.info("Setting up .mcp.json")
-                success, error = setup_mcp_config(BASE_DIR)
-                if success:
-                    summary['configs_updated'].append('System/.mcp.json')
-                else:
-                    summary['errors'].append(f"MCP config error: {error}")
-
-                # 7. Create completion marker
-                logger.info("Creating completion marker")
-                marker_data = {
-                    "completed_at": datetime.now().isoformat(),
-                    "user_name": session['data']['name'],
-                    "role": session['data']['role'],
-                    "email_domain": session['data'].get('email_domain', ''),
-                    "has_pillars": len(session['data'].get('pillars', [])) > 0,
-                    "phase2_completed": False,
-                    "pre_analysis_deferred": True  # Analysis moved to /getting-started for performance
-                }
-                MARKER_FILE.write_text(json.dumps(marker_data, indent=2, cls=DateTimeEncoder))
-                logger.info("Completion marker created")
-
-                # 8. Delete session file
-                if SESSION_FILE.exists():
-                    SESSION_FILE.unlink()
-                    logger.info("Deleted session file")
+                logger.info("Routing onboarding finalization through the provision contract")
+                summary = _finalize_through_provisioner(session)
 
                 result = create_success_response(
                     summary,
-                    f"Onboarding complete! Created {len(folders)} folders, {len(summary['files_created'])} files"
+                    f"Onboarding complete! Created {len(summary['folders_created'])} folders, {len(summary['files_created'])} files"
+                )
+                surface_analytics_attempt(
+                    result,
+                    _fire_analytics_event,
+                    "onboarding_completed",
                 )
                 
             except Exception as e:

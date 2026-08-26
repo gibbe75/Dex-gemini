@@ -9,7 +9,7 @@
 ## Core Workflows (8 features)
 
 - [x] Daily planning (`/daily-plan`)
-- [x] Daily review (`/review` or `/daily-review`)
+- [x] Daily review (`/daily-review`)
 - [ ] Weekly planning (`/week-plan`)
 - [ ] Weekly review (`/week-review`)
 - [x] Quarterly planning (`/quarter-plan`)
@@ -17,11 +17,10 @@
 - [ ] Getting started tour (`/getting-started`)
 - [ ] Journaling (`/journal`)
 
-## Meeting Workflows (7 features)
+## Meeting Workflows (6 features)
 
 - [ ] Meeting prep (`/meeting-prep`)
 - [ ] Meeting processing (`/process-meetings`)
-- [ ] Commitment scan (`/commitment-scan`)
 - [ ] Person page created
 - [ ] Person page updated
 - [ ] Company page created
@@ -60,7 +59,7 @@
 - [ ] Promotion readiness checked
 - [ ] Skills gap analysis
 
-## System Discovery & Improvement (10 features)
+## System Discovery & Improvement (9 features)
 
 - [ ] Feature discovery (`/dex-level-up`)
 - [ ] X-ray transparency (`/xray`)
@@ -71,34 +70,21 @@
 - [ ] Dex updated (`/dex-update`)
 - [ ] Dex rolled back (`/dex-rollback`)
 - [ ] Learnings reviewed (`/learnings`)
-- [ ] Beta feature activated (`/beta-activate`)
 
-## Integrations (8 features)
+## Integrations (5 features)
 
 - [ ] Calendar connected (via Calendar MCP)
 - [ ] Calendar synced daily
 - [ ] Granola connected (via Granola MCP)
 - [ ] Obsidian enabled (`/dex-obsidian-setup`)
-- [ ] ScreenPipe enabled (`/screenpipe-setup`)
-- [ ] ScreenPipe used (`/screen-recall` or `/screen-summary`)
 - [ ] MCP added (`/dex-add-mcp`)
-- [ ] Pi used (`/pi`)
 
-## AI Configuration (5 features)
-
-- [ ] AI setup started (`/ai-setup`)
-- [ ] Budget cloud configured (OpenRouter)
-- [ ] Offline mode configured (Ollama)
-- [ ] Smart routing enabled
-- [ ] AI status checked (`/ai-status`)
-
-## Advanced (7 features)
+## Advanced (6 features)
 
 - [ ] Prompt improvement via API (`/prompt-improver`)
 - [ ] Custom MCP created (`/create-mcp`)
 - [ ] MCP integrated (`/integrate-mcp`)
 - [ ] Custom skill created (`/create-skill`)
-- [ ] Demo mode used (`/dex-demo`)
 - [ ] Vault reset (`/reset`)
 - [ ] Setup re-run (`/setup`)
 
@@ -127,30 +113,16 @@ Tracks anonymous feature usage tracking to help improve Dex.
 
 ---
 
-## ScreenPipe Consent
+## Health Telemetry Consent
 
-Tracks whether user has been asked about ScreenPipe ambient intelligence.
+Separate, optional nightly fleet-health counts. This setting is independent of analytics.
 
-- **Consent asked:** false
-- **Consent decision:** pending
-- **Consent date:** (not yet decided)
+**Health telemetry:** pending
 
 **Values:**
-- `Consent decision: pending` → Not yet asked
-- `Consent decision: opted-in` → User wants ScreenPipe features
-- `Consent decision: opted-out` → User declined ScreenPipe
-
-**What ScreenPipe enables (when opted in):**
-- `/commitment-scan` - Detect uncommitted asks/promises from Slack, Email, etc.
-- Daily review commitment check - Surface items during `/daily-review`
-- Time audit - Breakdown of time by app
-- Screen recall - "What was I doing at 2pm?"
-
-**Privacy:**
-- All data stored locally (never sent anywhere)
-- Work apps only (browsers, banking, social blocked by default)
-- Auto-deletes after 30 days
-- User can disable anytime
+- `Health telemetry: opted-in` → Send the counts-only nightly smoke verdict
+- `Health telemetry: opted-out` → Do not send nightly health telemetry
+- `Health telemetry: pending` → Not yet decided; missing or pending means nothing is sent
 
 ---
 
@@ -159,7 +131,7 @@ Tracks whether user has been asked about ScreenPipe ambient intelligence.
 Auto-calculated metrics (if analytics opted in). Updated when features are used.
 
 - **Days since setup:** 0
-- **Feature adoption score:** 0/66
+- **Feature adoption score:** 0/61
 - **Journey stage:** new
 - **Most active area:** (not yet determined)
 - **Last active date:** (not yet active)

@@ -27,7 +27,12 @@ def get_vault_path() -> str:
 
 
 def get_mcp_config_path() -> Path:
-    return Path(get_vault_path()) / ".mcp.json"
+    vault_root = Path(get_vault_path())
+    root_config = vault_root / ".mcp.json"
+    legacy_config = vault_root / "System" / ".mcp.json"
+    if root_config.exists() or not legacy_config.exists():
+        return root_config
+    return legacy_config
 
 
 def get_health_path() -> Path:
@@ -40,7 +45,10 @@ def get_error_queue_path() -> Path:
     return Path(get_vault_path()) / ".logs" / "error-queue.json"
 
 
-# Map of MCP server names → their Python module files (relative to dex-core/core/mcp/)
+# Map of MCP server names → their Python module files (relative to core/mcp/).
+# Core servers only. An opt-in integration server (core/integrations/<name>/)
+# is not listed here: preflight only covers what every install registers, and
+# each integration reports its own health through its Doctor probe.
 SERVER_MODULES = {
     "work-mcp": "work_server.py",
     "calendar-mcp": "calendar_server.py",
@@ -50,10 +58,9 @@ SERVER_MODULES = {
     "dex-analytics": "analytics_server.py",
     "onboarding-mcp": "onboarding_server.py",
     "resume-mcp": "resume_server.py",
-    "beta-mcp": "beta_server.py",
+    "session-memory": "session_memory_server.py",
+    "customization-migration-mcp": "customization_migration_server.py",
     "update-checker": "update_checker.py",
-    "commitment-mcp": "commitment_server.py",
-    "demo-mode-mcp": "demo_mode_server.py",
 }
 
 # Human-friendly names
@@ -66,10 +73,8 @@ SERVER_LABELS = {
     "dex-analytics": "Analytics",
     "onboarding-mcp": "Onboarding",
     "resume-mcp": "Resume Builder",
-    "beta-mcp": "Beta Features",
+    "customization-migration-mcp": "Customization Migration",
     "update-checker": "Update Checker",
-    "commitment-mcp": "Commitment Detection",
-    "demo-mode-mcp": "Demo Mode",
 }
 
 
@@ -128,7 +133,7 @@ def needs_recheck(health: dict) -> bool:
 
 def check_server(server_name: str) -> dict:
     """Run fast health check for a single MCP server."""
-    mcp_dir = Path(get_vault_path()) / "dex-core" / "core" / "mcp"
+    mcp_dir = Path(get_vault_path()) / "core" / "mcp"
     module_file = SERVER_MODULES.get(server_name)
 
     if not module_file:
