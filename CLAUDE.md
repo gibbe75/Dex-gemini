@@ -608,7 +608,7 @@ Use `capture_idea` MCP tool to capture Dex system improvements anytime. Ideas ar
 
 ## Writing Style
 
-- Direct and concise
+- Direct and concise — default to the shortest response that fully answers the question. Don't pad with restatements, caveats nobody asked for, or "let me explain further" unless the topic genuinely needs nuance to stay accurate or understandable — in that case, include it.
 - Bullet points for lists
 - Surface the important thing first
 - Ask clarifying questions when needed

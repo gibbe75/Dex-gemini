@@ -289,7 +289,7 @@ def load_pillars_from_yaml() -> Dict[str, Dict]:
         return DEFAULT_PILLARS
     
     try:
-        content = get_pillars_file().read_text()
+        content = get_pillars_file().read_text(encoding='utf-8')
         data = yaml.safe_load(content)
         
         if not data or 'pillars' not in data:
@@ -327,7 +327,7 @@ def load_priority_limits_from_yaml() -> Dict[str, int]:
         return DEFAULT_PRIORITY_LIMITS
     
     try:
-        content = get_pillars_file().read_text()
+        content = get_pillars_file().read_text(encoding='utf-8')
         data = yaml.safe_load(content)
         
         if data and 'priority_limits' in data:
@@ -469,7 +469,7 @@ def generate_task_id() -> str:
             continue
         for md_file in folder.rglob('*.md'):
             try:
-                content = md_file.read_text()
+                content = md_file.read_text(encoding='utf-8')
                 pattern = r'\^task-\d{8}-(\d{3,})'
                 matches = re.findall(pattern, content)
                 existing_ids.extend([int(m) for m in matches])
@@ -634,7 +634,7 @@ def stamp_task_source_line(source: str, source_line: str,
         }
 
     try:
-        content = source_path.read_text()
+        content = source_path.read_text(encoding='utf-8')
         lines = content.splitlines(keepends=True)
         target = source_line.strip()
         exact_matches = []
@@ -668,7 +668,7 @@ def stamp_task_source_line(source: str, source_line: str,
 
             line_ending = lines[match_index][len(matched_line):]
             lines[match_index] = f'{matched_line} ^{task_id}{line_ending}'
-            source_path.write_text(''.join(lines))
+            source_path.write_text(''.join(lines), encoding='utf-8')
             return {'attempted': True, 'stamped': True}
 
         if len(anchored_matches) == 1:
@@ -697,7 +697,7 @@ def find_task_by_id(task_id: str) -> List[Dict[str, Any]]:
 
     for md_file in BASE_DIR.rglob('*.md'):
         try:
-            content = md_file.read_text()
+            content = md_file.read_text(encoding='utf-8')
             lines = content.split('\n')
 
             for i, line in enumerate(lines):
@@ -731,7 +731,7 @@ def reusable_source_task_id(source: str, source_line: str) -> Optional[str]:
         target = source_line.strip()
         matching_lines = [
             line.strip()
-            for line in source_path.read_text().splitlines()
+            for line in source_path.read_text(encoding='utf-8').splitlines()
             if line.strip() == target
             and re.match(r'^-\s*\[[ xX]\]', line.strip())
         ]
@@ -773,7 +773,7 @@ def update_task_status_everywhere(task_id: str, completed: bool) -> Dict[str, An
     for instance in instances:
         try:
             filepath = Path(instance['file'])
-            content = filepath.read_text()
+            content = filepath.read_text(encoding='utf-8')
             lines = content.split('\n')
             
             line_idx = instance['line_number'] - 1
@@ -802,7 +802,7 @@ def update_task_status_everywhere(task_id: str, completed: bool) -> Dict[str, An
             
             if new_line != old_line:
                 lines[line_idx] = new_line
-                filepath.write_text('\n'.join(lines))
+                filepath.write_text('\n'.join(lines), encoding='utf-8')
                 updated_files.append({
                     'file': str(filepath),
                     'line': instance['line_number']
@@ -937,7 +937,7 @@ def find_tasks_for_page(page_path: str) -> List[Dict[str, Any]]:
     if not get_tasks_file().exists():
         return []
     
-    content = get_tasks_file().read_text()
+    content = get_tasks_file().read_text(encoding='utf-8')
     lines = content.split('\n')
     
     # Normalize page path for matching
@@ -1010,7 +1010,7 @@ def update_related_tasks_section(page_path: str, tasks: List[Dict[str, Any]]) ->
         logger.warning("Page is missing or outside the vault: %s", page_path)
         return False
     
-    content = filepath.read_text()
+    content = filepath.read_text(encoding='utf-8')
     timestamp = _tz_now().strftime('%Y-%m-%d %H:%M')
     
     # Build the new Related Tasks section
@@ -1045,7 +1045,7 @@ def update_related_tasks_section(page_path: str, tasks: List[Dict[str, Any]]) ->
         lines.insert(insert_idx, '\n' + section_content)
         new_content = '\n'.join(lines)
     
-    filepath.write_text(new_content)
+    filepath.write_text(new_content, encoding='utf-8')
     return True
 
 def sync_task_refs_for_page(page_path: str) -> Dict[str, Any]:
@@ -1069,7 +1069,7 @@ def propagate_task_status_to_refs(task_title: str, completed: bool) -> List[str]
     if not get_tasks_file().exists():
         return updated_pages
     
-    content = get_tasks_file().read_text()
+    content = get_tasks_file().read_text(encoding='utf-8')
     
     # Find the task line
     for line in content.split('\n'):
@@ -1137,7 +1137,7 @@ def get_company_domains(company_filepath: Path) -> List[str]:
     if not company_filepath.exists():
         return []
     
-    content = company_filepath.read_text()
+    content = company_filepath.read_text(encoding='utf-8')
     domains = []
     
     for line in content.split('\n'):
@@ -1485,7 +1485,7 @@ def _profile_email_domains() -> set[str]:
     if yaml is None or not USER_PROFILE_FILE.exists():
         return set()
     try:
-        profile = yaml.safe_load(USER_PROFILE_FILE.read_text()) or {}
+        profile = yaml.safe_load(USER_PROFILE_FILE.read_text(encoding='utf-8')) or {}
     except (OSError, yaml.YAMLError):
         return set()
     configured = profile.get('email_domain') or ''
@@ -1609,7 +1609,7 @@ def load_meeting_cache() -> Optional[Dict[str, Any]]:
     if not MEETING_CACHE_FILE.exists():
         return None
     try:
-        return json.loads(MEETING_CACHE_FILE.read_text())
+        return json.loads(MEETING_CACHE_FILE.read_text(encoding='utf-8'))
     except (json.JSONDecodeError, OSError):
         return None
 
@@ -1735,7 +1735,7 @@ def rebuild_meeting_cache_data() -> Dict[str, Any]:
             continue
 
         try:
-            content = filepath.read_text()
+            content = filepath.read_text(encoding='utf-8')
             entry = _parse_meeting_file_python(content, filepath.name, rel_path)
 
             idx = existing_by_source.get(rel_path)
@@ -1760,7 +1760,7 @@ def rebuild_meeting_cache_data() -> Dict[str, Any]:
     # Save
     cache['last_updated'] = datetime.now().isoformat()
     MEETING_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    MEETING_CACHE_FILE.write_text(json.dumps(cache, indent=2) + '\n')
+    MEETING_CACHE_FILE.write_text(json.dumps(cache, indent=2) + '\n', encoding='utf-8')
 
     return {
         'success': True,
@@ -1856,7 +1856,7 @@ def find_meetings_for_company(company_name: str, domains: List[str]) -> List[Dic
     company_name_lower = company_name.lower()
     
     for meeting_file in get_meetings_dir().glob('*.md'):
-        content = meeting_file.read_text()
+        content = meeting_file.read_text(encoding='utf-8')
         content_lower = content.lower()
         
         # Check if company name or any domain appears in meeting
@@ -1901,7 +1901,7 @@ def refresh_company_page(company_path: str) -> Dict[str, Any]:
             'error': f'Company page not found: {filepath}'
         }
     
-    content = filepath.read_text()
+    content = filepath.read_text(encoding='utf-8')
     company_name = filepath.stem.replace('_', ' ')
     
     # Get domains for meeting matching
@@ -1977,7 +1977,7 @@ def refresh_company_page(company_path: str) -> Dict[str, Any]:
     # Update the Updated timestamp at the bottom
     content = re.sub(r'\*Updated: .*?\*', f'*Updated: {timestamp}*', content)
     
-    filepath.write_text(content)
+    filepath.write_text(content, encoding='utf-8')
     
     return {
         'success': True,
@@ -1996,7 +1996,7 @@ def list_companies() -> List[Dict[str, Any]]:
         return companies
     
     for company_file in COMPANIES_DIR.glob('*.md'):
-        content = company_file.read_text()
+        content = company_file.read_text(encoding='utf-8')
         entity = parse_entity_page(company_file)
         
         # Canonical pages keep status in frontmatter; parse_entity_page also
@@ -2120,7 +2120,7 @@ def get_quarter_info(quarter_date: Optional[date] = None) -> Dict[str, Any]:
     q1_start_month = 1  # Default to January
     if USER_PROFILE_FILE.exists() and yaml:
         try:
-            content = USER_PROFILE_FILE.read_text()
+            content = USER_PROFILE_FILE.read_text(encoding='utf-8')
             data = yaml.safe_load(content)
             if data and 'quarterly_planning' in data:
                 q1_start_month = data['quarterly_planning'].get('q1_start_month', 1)
@@ -2191,7 +2191,7 @@ def parse_quarterly_goals(filepath: Path) -> List[Dict[str, Any]]:
     if not filepath.exists():
         return []
     
-    content = filepath.read_text()
+    content = filepath.read_text(encoding='utf-8')
     goals = []
     
     # Parse frontmatter if present
@@ -2297,7 +2297,7 @@ def find_linked_priorities(goal_id: str) -> List[Dict[str, Any]]:
     if not priorities_file.exists():
         return []
     
-    content = priorities_file.read_text()
+    content = priorities_file.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     linked_priorities = []
@@ -2356,7 +2356,7 @@ def update_goal_in_file(goal_id: str, updates: Dict[str, Any]) -> bool:
     if not goals_file.exists():
         return False
     
-    content = goals_file.read_text()
+    content = goals_file.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     # Find the goal
@@ -2381,7 +2381,7 @@ def update_goal_in_file(goal_id: str, updates: Dict[str, Any]) -> bool:
                 break
     
     # Write back
-    goals_file.write_text('\n'.join(lines))
+    goals_file.write_text('\n'.join(lines), encoding='utf-8')
     return True
 
 def create_quarterly_goal_in_file(goal_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -2415,7 +2415,7 @@ created: {_tz_now().strftime('%Y-%m-%d')}
 ## 🎯 Quarter Objectives
 
 """
-        goals_file.write_text(content)
+        goals_file.write_text(content, encoding='utf-8')
     
     # Read existing goals to generate ID
     existing_goals = parse_quarterly_goals(goals_file)
@@ -2455,7 +2455,7 @@ created: {_tz_now().strftime('%Y-%m-%d')}
     goal_section += "\n---\n"
     
     # Insert before "## 📊 Pillar Alignment" or at end
-    content = goals_file.read_text()
+    content = goals_file.read_text(encoding='utf-8')
     
     insert_marker = "## 📊 Pillar Alignment"
     if insert_marker in content:
@@ -2463,7 +2463,7 @@ created: {_tz_now().strftime('%Y-%m-%d')}
     else:
         content += goal_section
     
-    goals_file.write_text(content)
+    goals_file.write_text(content, encoding='utf-8')
     
     return {
         'success': True,
@@ -2504,7 +2504,7 @@ def parse_weekly_priorities(filepath: Path) -> List[Dict[str, Any]]:
     if not filepath.exists():
         return []
     
-    content = filepath.read_text()
+    content = filepath.read_text(encoding='utf-8')
     priorities = []
     
     lines = content.split('\n')
@@ -2549,7 +2549,7 @@ def find_linked_tasks(priority_id: str) -> List[Dict[str, Any]]:
     if not tasks_file.exists():
         return []
     
-    content = tasks_file.read_text()
+    content = tasks_file.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     linked_tasks = []
@@ -2701,7 +2701,7 @@ def parse_tasks_file(filepath: Path) -> List[Dict[str, Any]]:
     if not filepath.exists():
         return tasks
     
-    content = filepath.read_text()
+    content = filepath.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     current_section = None
@@ -2872,7 +2872,7 @@ def migrate_quarterly_goals() -> Dict[str, Any]:
             'message': 'No 01-Quarter_Goals/Quarter_Goals.md file found'
         }
     
-    content = goals_file.read_text()
+    content = goals_file.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     # Parse existing goals
@@ -2899,7 +2899,7 @@ def migrate_quarterly_goals() -> Dict[str, Any]:
             goals_updated += 1
     
     if goals_updated > 0:
-        goals_file.write_text('\n'.join(lines))
+        goals_file.write_text('\n'.join(lines), encoding='utf-8')
     
     return {
         'success': True,
@@ -2917,7 +2917,7 @@ def migrate_weekly_priorities() -> Dict[str, Any]:
             'message': 'No Week Priorities file found'
         }
     
-    content = priorities_file.read_text()
+    content = priorities_file.read_text(encoding='utf-8')
     lines = content.split('\n')
     
     # Determine week date
@@ -2948,7 +2948,7 @@ def migrate_weekly_priorities() -> Dict[str, Any]:
             priorities_updated += 1
     
     if priorities_updated > 0:
-        priorities_file.write_text('\n'.join(lines))
+        priorities_file.write_text('\n'.join(lines), encoding='utf-8')
     
     return {
         'success': True,
@@ -3122,7 +3122,7 @@ def find_project_for_meeting(attendees: List[str], meeting_title: str) -> Option
             continue
             
         try:
-            content = project_file.read_text()
+            content = project_file.read_text(encoding='utf-8')
             content_lower = content.lower()
             
             score = 0
@@ -3169,7 +3169,7 @@ def find_company_for_attendees(attendees: List[str], domains: List[str] = None) 
     
     for company_file in COMPANIES_DIR.glob('*.md'):
         try:
-            content = company_file.read_text()
+            content = company_file.read_text(encoding='utf-8')
             content_lower = content.lower()
             company_name = company_file.stem.lower().replace('_', ' ')
             
@@ -3257,7 +3257,7 @@ def get_meeting_context_data(meeting_title: str = None, attendees: List[str] = N
     # Find outstanding tasks related to attendees
     tasks_file = get_tasks_file()
     if tasks_file.exists():
-        content = tasks_file.read_text()
+        content = tasks_file.read_text(encoding='utf-8')
         for attendee in attendees:
             attendee_lower = attendee.lower()
             for line in content.split('\n'):
@@ -3374,7 +3374,7 @@ def get_commitments_due_data(date_range: str = 'today') -> Dict[str, Any]:
                     if (today - meeting_date).days > 14:
                         continue
                 
-                content = meeting_file.read_text()
+                content = meeting_file.read_text(encoding='utf-8')
                 commitments = extract_commitments_from_text(
                     content, 
                     source=str(meeting_file.relative_to(BASE_DIR)),
@@ -3407,7 +3407,7 @@ def get_commitments_due_data(date_range: str = 'today') -> Dict[str, Any]:
         
         for person_file in people_subdir.glob('*.md'):
             try:
-                content = person_file.read_text()
+                content = person_file.read_text(encoding='utf-8')
                 
                 # Look for "Open Items" or "Action Items" sections
                 open_items_match = re.search(r'(?:## Open Items|## Action Items|## Follow-?ups?)\n(.*?)(?:\n##|\Z)', content, re.DOTALL)
@@ -4684,7 +4684,7 @@ async def _handle_call_tool_inner(
         
         # Add to 03-Tasks/Tasks.md under the appropriate section
         if get_tasks_file().exists():
-            content = get_tasks_file().read_text()
+            content = get_tasks_file().read_text(encoding='utf-8')
         else:
             content = "# Tasks\n\n"
         
@@ -4714,7 +4714,7 @@ async def _handle_call_tool_inner(
             lines.insert(insert_idx, f"\n{section_header}\n{task_entry}\n")
             new_content = '\n'.join(lines)
         
-        get_tasks_file().write_text(new_content)
+        get_tasks_file().write_text(new_content, encoding='utf-8')
 
         if stamp_source_line and source:
             try:
@@ -4803,7 +4803,7 @@ async def _handle_call_tool_inner(
                 "error": "task not found",
             }))]
 
-        lines = tasks_file.read_text().split("\n")
+        lines = tasks_file.read_text(encoding='utf-8').split("\n")
         task_anchor = re.compile(rf"\^{re.escape(task_id)}(?![A-Za-z0-9_-])")
         task_index = next(
             (
@@ -4903,7 +4903,7 @@ async def _handle_call_tool_inner(
                 "goal_id": goal_id,
             }
 
-        tasks_file.write_text("\n".join(lines))
+        tasks_file.write_text("\n".join(lines), encoding='utf-8')
         return [types.TextContent(type="text", text=json.dumps(result))]
 
     elif name == "update_task_status":
@@ -5537,7 +5537,7 @@ async def _handle_call_tool_inner(
         
         # Add to Week Priorities.md
         if priorities_file.exists():
-            content = priorities_file.read_text()
+            content = priorities_file.read_text(encoding='utf-8')
         else:
             # Create new file
             priorities_file.parent.mkdir(parents=True, exist_ok=True)
@@ -5561,7 +5561,7 @@ async def _handle_call_tool_inner(
             content += "\n" + priority_entry + "\n"
             new_content = content
         
-        priorities_file.write_text(new_content)
+        priorities_file.write_text(new_content, encoding='utf-8')
         
         result = {
             "success": True,
@@ -6162,7 +6162,7 @@ async def _handle_call_tool_inner(
         if note:
             entry["note"] = note
 
-        with open(SKILL_RATINGS_FILE, 'a') as f:
+        with open(SKILL_RATINGS_FILE, 'a', encoding='utf-8') as f:
             f.write(json.dumps(entry) + '\n')
 
         result = {
@@ -6188,7 +6188,7 @@ async def _handle_call_tool_inner(
             return [types.TextContent(type="text", text=json.dumps({"ratings": {}, "message": "No ratings captured yet"}))]
 
         ratings_by_skill = {}
-        for line in SKILL_RATINGS_FILE.read_text().strip().split('\n'):
+        for line in SKILL_RATINGS_FILE.read_text(encoding='utf-8').strip().split('\n'):
             if not line.strip():
                 continue
             try:

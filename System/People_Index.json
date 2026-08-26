@@ -1,56 +1,240 @@
 {
-  "version": 1,
-  "built_at": "2026-05-26T12:48:16.078667",
-  "total": 4,
+  "version": 2,
+  "built_at": "2026-08-26T16:27:51.779559",
+  "total": 15,
   "by_type": {
-    "internal": 4,
-    "external": 0,
+    "internal": 14,
+    "external": 1,
     "cpo_network": 0
   },
   "people": [
     {
+      "aliases": [],
+      "company": "Lucca",
+      "email": "agagnard@luccasoftware.com",
+      "emails": [
+        "agagnard@luccasoftware.com"
+      ],
+      "first_name": "alexandre",
+      "last_interaction": null,
       "name": "Alexandre Gagnard",
-      "company": null,
-      "role": null,
-      "email": null,
-      "type": "internal",
-      "path": "05-Areas\\People\\Internal\\Alexandre_Gagnard.md",
-      "last_interaction": null,
+      "path": "05-Areas/People/Internal/Alexandre_Gagnard.md",
+      "role": "Manager de Baudouin",
+      "status": "populated",
       "tags": [],
-      "status": "stub"
+      "type": "internal"
     },
     {
+      "aliases": [
+        "Alexia"
+      ],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "alexia",
+      "last_interaction": "2026-08-26",
+      "name": "Alexia Alarza",
+      "path": "05-Areas/People/Internal/Alexia_Alarza.md",
+      "role": "D\u00e9veloppeuse \u2014 Lucca R\u00e9mun\u00e9ration",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": null,
+      "email": null,
+      "emails": [],
+      "first_name": "camille",
+      "last_interaction": null,
       "name": "Camille Jouzeau",
-      "company": null,
-      "role": null,
-      "email": null,
-      "type": "internal",
-      "path": "05-Areas\\People\\Internal\\Camille_Jouzeau.md",
-      "last_interaction": null,
+      "path": "05-Areas/People/Internal/Camille_Jouzeau.md",
+      "role": "Sales/CS (Lucca)",
+      "status": "populated",
       "tags": [],
-      "status": "populated"
+      "type": "internal"
     },
     {
-      "name": "Gilles Van Elslande",
-      "company": null,
-      "role": null,
+      "aliases": [],
+      "company": "Lucca",
       "email": null,
-      "type": "internal",
-      "path": "05-Areas\\People\\Internal\\Gilles_Van_Elslande.md",
+      "emails": [],
+      "first_name": "cassandre",
       "last_interaction": null,
+      "name": "Cassandre Collas",
+      "path": "05-Areas/People/Internal/Cassandre_Collas.md",
+      "role": "RH / Recrutement (co-pilote le recrutement PM avec Baudouin)",
+      "status": "populated",
       "tags": [],
-      "status": "populated"
+      "type": "internal"
     },
     {
+      "aliases": [],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "florian",
+      "last_interaction": "2026-08-26",
+      "name": "Florian Guillemot",
+      "path": "05-Areas/People/Internal/Florian_Guillemot.md",
+      "role": "D\u00e9veloppeur \u2014 Lucca R\u00e9mun\u00e9ration (situation individuelle / moteur de r\u00e9mun\u00e9ration)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [
+        "FX Gentilhomme",
+        "FX",
+        "Afiq"
+      ],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "fran\u00e7ois-xavier",
+      "last_interaction": "2026-08-26",
+      "name": "Fran\u00e7ois-Xavier Gentilhomme",
+      "path": "05-Areas/People/Internal/Francois-Xavier_Gentilhomme.md",
+      "role": "\u00c9quipe Lucca R\u00e9mun\u00e9ration (r\u00f4le exact \u00e0 confirmer)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Lucca",
+      "email": "gvanelslande@luccasoftware.com",
+      "emails": [
+        "gvanelslande@luccasoftware.com"
+      ],
+      "first_name": "gilles",
+      "last_interaction": "2026-08-26",
+      "name": "Gilles \"Giloo\" Van Elslande",
+      "path": "05-Areas/People/Internal/Gilles_Van_Elslande.md",
+      "role": "Product Manager (report \u00e0 Baudouin)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [
+        "Imad"
+      ],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "imad",
+      "last_interaction": "2026-08-26",
+      "name": "Imad El Hitti",
+      "path": "05-Areas/People/Internal/Imad_El_Hitti.md",
+      "role": "D\u00e9veloppeur \u2014 Lucca R\u00e9mun\u00e9ration",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "louis",
+      "last_interaction": null,
+      "name": "Louis Amstutz",
+      "path": "05-Areas/People/Internal/Louis_Amstutz.md",
+      "role": "Travaille avec Nils Hasselmark sur la discovery multi-devise (r\u00f4le exact \u00e0 confirmer)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [
+        "Lucas"
+      ],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "lucas",
+      "last_interaction": "2026-08-26",
+      "name": "Lucas Brette",
+      "path": "05-Areas/People/Internal/Lucas_Brette.md",
+      "role": "D\u00e9veloppeur front \u2014 Lucca R\u00e9mun\u00e9ration",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Lucca",
+      "email": "nhasselmark@luccasoftware.com",
+      "emails": [
+        "nhasselmark@luccasoftware.com"
+      ],
+      "first_name": "nils",
+      "last_interaction": null,
       "name": "Nils Hasselmark",
-      "company": null,
-      "role": null,
-      "email": null,
-      "type": "internal",
-      "path": "05-Areas\\People\\Internal\\Nils_Hasselmark.md",
-      "last_interaction": null,
+      "path": "05-Areas/People/Internal/Nils_Hasselmark.md",
+      "role": "Product Manager (report \u00e0 Baudouin)",
+      "status": "populated",
       "tags": [],
-      "status": "stub"
+      "type": "internal"
+    },
+    {
+      "aliases": [
+        "Sylvain"
+      ],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "sylvain",
+      "last_interaction": "2026-08-26",
+      "name": "Sylvain Jourdan",
+      "path": "05-Areas/People/Internal/Sylvain_Jourdan.md",
+      "role": "\u00c9quipe Lucca R\u00e9mun\u00e9ration (r\u00f4le exact \u00e0 confirmer)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "thomas",
+      "last_interaction": "2026-08-26",
+      "name": "Thomas Bonnin",
+      "path": "05-Areas/People/Internal/Thomas_Bonnin.md",
+      "role": "Product/PMM (\u00e0 confirmer) \u2014 travaille avec Baudouin sur le repositionnement ICP/GTM R\u00e9mun\u00e9ration",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Lucca",
+      "email": null,
+      "emails": [],
+      "first_name": "victor",
+      "last_interaction": null,
+      "name": "Victor Romain",
+      "path": "05-Areas/People/Internal/Victor_Romain.md",
+      "role": "Sales \u2014 connaissance approfondie de l'organisation OBD, du funnel commercial et des donn\u00e9es Salesforce (r\u00f4le exact \u00e0 confirmer, possiblement Sales Ops/RevOps ou management commercial)",
+      "status": "populated",
+      "tags": [],
+      "type": "internal"
+    },
+    {
+      "aliases": [],
+      "company": "Touche Pas \u00e0 la paye",
+      "email": null,
+      "emails": [],
+      "first_name": "laura",
+      "last_interaction": "2026-08-24",
+      "name": "Laura Hinschberger",
+      "path": "05-Areas/People/External/Laura_Hinschberger.md",
+      "role": "Contact chez Touche Pas \u00e0 la paye (TPLP) \u2014 sujets primes / DSN",
+      "status": "populated",
+      "tags": [],
+      "type": "external"
     }
   ]
 }
