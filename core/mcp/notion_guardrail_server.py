@@ -682,7 +682,21 @@ async def lire_reunions_date(date: str) -> list[dict]:
         # lookups run against the actual page, not the peek overlay.
         await page.keyboard.press("Control+Enter")
         await _settle(page)
-        item = await _read_meeting_item(page)
+        # One row failing to read (e.g. a page still missing its AI Meeting
+        # Notes widget, or an unexpected layout) must not take down every
+        # other meeting for the date — isolate per-row so a caller re-running
+        # this for the same date isn't blocked from the rows that DO work.
+        try:
+            item = await _read_meeting_item(page)
+        except Exception as exc:
+            logger.exception("Failed to read meeting row %r", row["title"])
+            results.append({
+                "id": None,
+                "nom": row["title"],
+                "date": date_display,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            continue
         results.append(item)
     return results
 

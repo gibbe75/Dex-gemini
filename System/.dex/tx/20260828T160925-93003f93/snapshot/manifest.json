@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "relative": "System/.dex/analytics-attempts.jsonl",
+      "existed": false,
+      "mode": null,
+      "sha256": null,
+      "size": null
+    }
+  ]
+}
